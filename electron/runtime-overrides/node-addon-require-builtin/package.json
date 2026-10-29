@@ -1,0 +1,9 @@
+{
+  "name": "node-addon-require-builtin",
+  "version": "0.1.9-dsh-desktop.1",
+  "private": true,
+  "description": "DSH Desktop stand-in for the upstream native module loader: resolves Node internals through --expose-internals instead of a V8 fingerprint table.",
+  "main": "index.js",
+  "license": "MIT",
+  "dshRuntimeStub": true
+}

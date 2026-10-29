@@ -26,10 +26,12 @@
 
 1. 读 `runtime-pin.json` 的 pinned 版本（当前 `0.2.0-rc.1`），在 `.runtime-build/` 里
    `npm install --omit=dev --os=win32 --cpu=x64`（按目标平台安装，跳过其他平台的可选依赖）；
-2. **构建期护栏（最关键的一条）**：用随包的 Electron 二进制问出自己的 V8 指纹
-   （`ELECTRON_RUN_AS_NODE=1 electron.exe -p process.versions.v8` → `15.2.124.13-electron.0`），
-   再去随包 dsh 的 `node-addon-require-builtin` 预构建二进制里找这个字符串，**找不到就中止构建**。
-   这正是 S1 阶段那个「dsh 以 `Unsupported/no-context` 启动失败」的失败模式，现在在构建期就被拦住；
+2. **替换原生模块加载器（最关键的一条）**：dsh 通过 `node-addon-require-builtin` 取 Node 内部模块，
+   上游二进制内嵌一张只认少数 Electron 构建的指纹表。脚本把它连同平台预构建与
+   `node-addon-native-custom-loader` 一起从 staging 删掉，换成
+   `electron/runtime-overrides/node-addon-require-builtin`（用 `--expose-internals` 解析
+   `internal/*`；壳在 `host-process.ts` 里把该 flag 放在 dsh 入口之前）。替身缺失或标记不对即中止构建。
+   这正是 S1 阶段那个「dsh 以 `Unsupported/no-context` 启动失败」的失败模式，现在由替身从根上绕开；
 3. 复制到 `runtime/dsh/`，**在副本上裁剪**（见下），然后**自证能加载**；
 4. 写 `desktop-runtime.json`：版本、平台、Electron/V8、文件数、列表摘要，以及 23 个关键文件的
    sha256（dsh 入口 + 每个 `.node` / `.dll` / `.exe`）。
@@ -390,6 +392,8 @@ exit  : 1
 | 用同一个仓库 URL 真装一次（`pnpm add https://github.com/omdsh-dev/dsh-genui`） | pnpm 正常跑起来（10.6 s）；随后被 **pnpm 10 自己的构建脚本策略**拦下（`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`）——那是 DSH 的 `allowBuilds` 审批流程该管的事，与本 shim 无关 |
 
 `verify-package.mjs` 的这一项检查也改成**在剥掉 `DSH_*` 的环境里实跑打包后的 shim**，专门守住这条路径。
+
+表里是当时的实测记录（随包 node 固定 24.18.1）。2026-10-29 起 `runtime-pin.json` 的 `node` 升到 24.22.2，dsh 宿主改由 `--expose-internals` + 替身取内部模块，见 `.agents/notes/implemented/architecture/2026-10-29-decouple-dsh-module-loader-from-electron.md`。
 
 ### 10.5 还没做
 

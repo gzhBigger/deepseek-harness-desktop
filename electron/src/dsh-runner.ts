@@ -33,7 +33,9 @@ export function runDshOnce(entry: string, args: readonly string[], options: {
 } = {}): Promise<DshRunResult> {
   const timeoutMs = options.timeoutMs ?? 20_000
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [entry, ...args], {
+    // The runtime-overrides stand-in for dsh's module loader needs the flag; it must sit
+    // before the entry, and this covers the gate probes (`--version`, `--help`).
+    const child = spawn(process.execPath, ['--expose-internals', entry, ...args], {
       cwd: options.cwd,
       env: nodeModeEnvironment(options.environment ?? {}),
       windowsHide: true,

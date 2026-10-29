@@ -45,6 +45,8 @@ node-addon-require-builtin unsupported: Unsupported/no-context
 
 ### 2.2 根因：白名单匹配的是**精确 V8 指纹**，不是主版本
 
+> **2026-10-29 更新**：该约束已被解除。壳用 `electron/runtime-overrides/node-addon-require-builtin` 替换了上游 addon，dsh 改走 `--expose-internals`；Electron 不再需要精确锁 `44.0.0`。本节保留为 S1 的现场记录（后来的等长改 V8 串实验表明匹配还依赖 Electron 版本字段），当前方案见 [2026-10-29-decouple-dsh-module-loader-from-electron.md](../../.agents/notes/implemented/architecture/2026-10-29-decouple-dsh-module-loader-from-electron.md)。
+
 `node-addon-require-builtin-win32-x64-msvc/prebuilt/win32-x64-msvc-napi-v9.node` 内嵌三组指纹：
 
 ```
@@ -76,12 +78,14 @@ SMOKE cookie → PASS
 1. **不需要第二个 Node 二进制**：`process.execPath` + `ELECTRON_RUN_AS_NODE=1` 就是官方 README 里「随包 Node」的等价物。
 2. **`src-tauri/resources/dsh-desktop-shell/` 零改动复用**：`--patch` overlay 注入、`DSH_DESKTOP_BRIDGE_DIR` 桥目录、路由注册全部照常工作（日志里 `host apply` 与路由注册均出现）。
 3. **不需要 `--expose-internals`**（那是官方私有 Host 用 Node 内部模块才需要的），也不需要 `cmd.exe` shim，参数无引号风险、无控制台闪窗。
+   > **2026-10-29 更新**：壳现在**需要**把 `--expose-internals` 放在 dsh 入口之前（替身模块加载器依赖它），见上。
 
 ### 2.4 由此产生的迁移约束
 
 - `electron` 依赖必须**精确锁定**，不能用 `^`；升级 Electron 前要先确认 dsh 侧插件的白名单是否覆盖目标版本。
 - 这条约束同时意味着：**「随包运行时」把 Electron 版本与 dsh 版本绑成了一对**。dsh 升级可能要求改 Electron 版本，反之亦然 —— 这正是官方把壳、运行时、pnpm 当作**同一个更新单元**的原因。
 - 该白名单存在于 dsh 的 `node-addon-require-builtin`，属于我们必须长期跟踪的上游行为。
+- **2026-10-29 更新**：以上三条约束已被替身方案解除；`--expose-internals` 现在是壳启动 dsh 的必需参数。
 
 ## 3. S2：反向代理加载模型（否决）
 

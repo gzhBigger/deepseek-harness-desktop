@@ -46,6 +46,7 @@ Electron 只是它体积的约 285 MB；剩下的是内置 Node 24 + Python 3.12
 P0 脚手架与三个技术验证已完成，证据见 [`docs/electron-p0-verification.md`](electron-p0-verification.md)。三条结论直接改写上面的判断：
 
 1. **S1 通过，但多一条硬约束**：Electron 必须**精确锁定 `44.0.0`**（不能写 `^44.0.0`）。dsh 的原生插件内嵌 V8 指纹白名单，`44.4.5` 的 V8 `15.2.124.28` 与白名单的 `15.2.124.13` 不匹配，dsh 直接以 `Unsupported/no-context` 退出。**「随包运行时」因此把 Electron 版本与 dsh 版本绑成一对**。
+   > **2026-10-29 更新**：该硬约束已解除（壳用自带替身替换 addon，改走 `--expose-internals`），见 [笔记](../.agents/notes/implemented/architecture/2026-10-29-decouple-dsh-module-loader-from-electron.md)。
 2. **S2 否决**：`dsh-app://app/` 反向代理下 HTTP 面全通（静态/API/插件 bundle 17 个请求全 200、首屏正常），但客户端推导出的会话流是 `ws://app/api/remote.mux` → 必断（界面停在「重新连接中...」）。带 host:port 的变体又被 Electron 自定义 scheme 剥掉端口。**结论：加载模型采用 Cookie 模式（D1 落地为 A2），不采用代理。**
 3. **S3 通过**：`DSH_HOME` 指向独立目录后，dsh 自行初始化完整 Harness home、面板插件照常注入、界面完整可用，与用户 `~/.dsh` 零交叉。
 
@@ -308,8 +309,8 @@ WS 单独处理：`session.defaultSession.webRequest.onBeforeSendHeaders({ urls:
 
 既然对齐官方走「随包」，下面这些约束就必须一起接受——它们不是可选项，官方 README 的决策表已经把因果写死了。
 
-1. **「随包 Node」其实就是 Electron 自己**。用 `ELECTRON_RUN_AS_NODE=1` + `process.execPath` 当 Node 跑 dsh 入口，不需要再带一个 Node 二进制（官方 `node-environment.ts` 只有 18 行）。入口指向包内 dsh 的 `lib/bin.js`；我们不需要 `--expose-internals`（那是私有 Host 用 Node 内部模块才需要的）。
-   **已实测的前提**：Electron 必须**精确锁定 `44.0.0`**。dsh 的 `node-addon-require-builtin` 内嵌 V8 指纹白名单（`43.0.0`→`15.0.245.13`、`44.0.0`→`15.2.124.13`、`45.0.0-alpha.6`→`15.4.80`），`44.4.5` 的 V8 是 `15.2.124.28`，不匹配即失败。这是一条长期维护约束：**Electron 版本与 dsh 版本被绑成一对**。
+1. **「随包 Node」其实就是 Electron 自己**。用 `ELECTRON_RUN_AS_NODE=1` + `process.execPath` 当 Node 跑 dsh 入口，不需要再带一个 Node 二进制（官方 `node-environment.ts` 只有 18 行）。入口指向包内 dsh 的 `lib/bin.js`；壳现在**显式传 `--expose-internals`**（替身模块加载器需要，且必须位于入口之前）。
+   **已实测的前提（2026-09-28 当时）**：Electron 必须**精确锁定 `44.0.0`**。dsh 的 `node-addon-require-builtin` 内嵌 V8 指纹白名单（`43.0.0`→`15.0.245.13`、`44.0.0`→`15.2.124.13`、`45.0.0-alpha.6`→`15.4.80`），`44.4.5` 的 V8 是 `15.2.124.28`，不匹配即失败。**该绑定已于 2026-10-29 解除**：壳用 `runtime-overrides/node-addon-require-builtin` 替换 addon，Electron 独立升级；见 [笔记](../.agents/notes/implemented/architecture/2026-10-29-decouple-dsh-module-loader-from-electron.md)。
 2. **依赖树怎么进包**。照官方 `prepare:dsh` 的做法：构建时安装一次生产依赖图 → 物化到 `app.asar/dsh` → 移除包管理器元数据 → 生成 **`desktop-runtime.json`**（壳版本、Electron 的 Node 版本、平台/架构、共享包版本、最终文件哈希清单），启动时先校验元数据与文件完整性再启动 Host。`asarUnpack` 必须覆盖 `**/*.{node,dll,exe,so}`、`**/*.so.*`、`spawn-helper`、`rg`。这一步同时也是「不再需要版本闸门」的前提：**版本一致性由打包期保证，而不是运行期探测**。
 3. **profile 归属（最容易踩的坑）**。官方的结论是：*Electron 在访问任何 profile 前获取进程生命周期单实例锁，并独占 `$DSH_HOME/profiles/desktop` 及其包管理器状态；CLI 与 Desktop 共享 `$DSH_HOME` 下受支持的产品数据，但绝不共享可执行包、插件激活、锁文件或 `node_modules`*。我们现在是直接复用用户 `~/.dsh` 的默认环境——随包后必须引入 `profiles/desktop` + 单实例锁，否则壳内 dsh 与用户命令行 dsh 会互相改版本、争 profile。
 4. **三道闸门的演化**。`dsh --version` / `--patch` 的探测对象从「用户环境」变成「包内运行时描述符」（启动时校验失败 → 修复安装，而不是「让你去升级 dsh」）。**固定端口 41729 必须保留**：面板桥的 cookie 回探/同源校验依赖 loopback 同源契约。「更新 DSH」的语义从「升级用户全局 dsh」变成「下载新的 Desktop 版本」。

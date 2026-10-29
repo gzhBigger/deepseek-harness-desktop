@@ -96,7 +96,10 @@ export class DshHostProcess {
     // `unknown option '--patch'` (verified in the Tauri P0). `--profile` is the same kind
     // of option, and `dsh web` is just the shipped `web` profile — booting our own
     // profile is what keeps plugin installs out of the CLI's reach.
+    // `--expose-internals` must precede the entry point: dsh's module-loader stand-in
+    // (electron/runtime-overrides) resolves `internal/*` through it instead of a native addon.
     const args = [
+      '--expose-internals',
       this.options.entry,
       '--profile', this.options.profileName,
       '--patch', overlay.path,

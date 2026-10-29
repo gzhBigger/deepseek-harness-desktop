@@ -17,7 +17,7 @@ Status: implemented
 
 ## Decision
 
-随包一个**真正的 `node.exe`**（`runtime-pin.json` 的 `node`，24.18.1，与 Electron 内置 node 同版本），并让 **pnpm 与 package script 都跑在它上面**：
+随包一个**真正的 `node.exe`**（`runtime-pin.json` 的 `node`，24.22.2，Electron 44.10.0 内置的是 24.22.1——两者同属 24.22 安全修复线），并让 **pnpm 与 package script 都跑在它上面**：
 
 - `runtime/dsh/bin/node.exe` 由 `prepare-runtime.mjs` 从官方 zip 下载，**先校验 `SHASUMS256.txt` 的 sha256**，再用 `tar`（bsdtar）只取 `node.exe` 这一个成员（npm/npx 不进安装包，pnpm 已随包）；
 - shim 的解析顺序改为 `%~dp0node.exe` → `DSH_DESKTOP_NODE_EXECUTABLE` → 安装根目录的应用二进制 → PATH 里的 `node`。`PATHEXT` 是 `.COM;.EXE;.BAT;.CMD;…`，所以 `node.exe` 也会被 Windows 自己优先解析到；
@@ -41,6 +41,6 @@ Status: implemented
 ## Consequences
 
 - **代价**：安装包 +约 21 MB（`node.exe` 88.3 MB 解压 / LZMA 后 22.9 MB），**每次更新下载同样 +21 MB**（我们发完整安装包）；安装后磁盘 +88.3 MB；物理落盘文件 62 → 487（安装耗时小幅回升，相对当初 12,573 → 84 的收益仍然很小）。另外要维护 node 的版本 pin（安全更新）、把它纳入签名与校验、并在分发中保留 Node.js 的 MIT 许可声明。
-- **收益**：零弹窗，且**不依赖用户机器上有 node**；package script 的执行环境变得确定（固定 24.18.1，与 Electron 内置 node 同版本）。
+- **收益**：零弹窗，且**不依赖用户机器上有 node**；package script 的执行环境变得确定（固定 24.22.2）；2026-10-29 起 dsh 宿主也升到 Electron 44.10.0（Node 24.22.1，见 [2026-10-29-decouple-dsh-module-loader-from-electron.md](2026-10-29-decouple-dsh-module-loader-from-electron.md)）。
 - **边界**：dsh 宿主本身仍跑在 Electron 上；profile、插件链接、更新通道、面板与浏览器功能都不受影响。爆炸半径只有"pnpm / package script"这条路径。
 - **与官方的关系**：官方客户端用同一个 Electron-as-node 设计，因此同样存在弹窗；这条是本项目**有意偏离**官方的一处，若将来官方或 pnpm 侧修好（pnpm 在无控制台父进程下 spawn 脚本应带 `CREATE_NO_WINDOW`），可以退回到不随包 node。

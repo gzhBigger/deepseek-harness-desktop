@@ -21,7 +21,7 @@
 - **开发态隔离**：`pnpm dev` 用 `ai.deepseek.dsh-desktop.dev` 目录与 `dsh-desktop-dev` profile，绝不碰安装版的设置与状态（`DSH_DESKTOP_USER_DATA_DIR` 可覆盖回共享）
 - **窗口几何记忆**：记住主窗口的位置与尺寸，只在与当前显示器布局仍相交时复用（拔掉外接屏后不会开到看不见的地方），已最大化状态一并恢复
 - **旧版迁移**：首次运行检测遗留的 Tauri 安装，经用户确认后静默卸载
-- **随包运行时**：安装包自带 dsh 生产依赖树 + `pnpm`（`resources/runtime/dsh`），**零环境安装**——PATH 里没有 dsh / node / git 也能跑；启动前校验完整性，构建期校验 Electron 与原生插件的 V8 指纹匹配
+- **随包运行时**：安装包自带 dsh 生产依赖树 + `pnpm`（`resources/runtime/dsh`），**零环境安装**——PATH 里没有 dsh / node / git 也能跑；启动前校验完整性，构建期用 shell 自带的模块加载器替身替换 dsh 的原生插件，并校验替身就位（`--expose-internals` 由壳传给 dsh）
 - **独立 profile**：壳引导 `--profile dsh-desktop`，首次运行从出厂 `web` profile 播种 bundle 与依赖，插件/锁文件/`node_modules` 与命令行的 `dsh` 完全隔离
 - 启动页窗口（首帧后显示）、托盘、关于对话框、退出时回收 dsh 子进程
 - 日志脱敏（一次性 token 一律 `token=***`，且**脱敏不参与导航**）
@@ -73,8 +73,7 @@ pnpm release:dry        # 发布演习：签名 + 自校验 + 生成 latest.json
 
 ## 硬约束（改动前必读）
 
-1. **Electron 必须精确锁定 `44.0.0`，不能写 `^44.0.0`。**
-   dsh 的原生插件 `node-addon-require-builtin` 内嵌 V8 指纹白名单（`43.0.0` / `44.0.0` / `45.0.0-alpha.6` 对应的精确 V8 版本）。`44.4.5` 的 V8 是 `15.2.124.28`，与白名单的 `15.2.124.13` 不匹配，dsh 会以 `Unsupported/no-context` 直接退出。升级 Electron 前必须先确认 dsh 侧白名单。
+1. **Electron 与随包 dsh 的版本不再互相绑定。** dsh 通过原生插件 `node-addon-require-builtin` 取 Node 内部模块，上游二进制内嵌一张只认少数 Electron 构建的指纹表（`43.0.0` / `44.0.0` / `44.7.0` / `45.0.0-alpha.6`），这正是壳曾精确锁 `44.0.0` 的原因。现在 `prepare-runtime.mjs` 会用 `runtime-overrides/node-addon-require-builtin` 替换它，改走 `--expose-internals`（壳在启动 dsh 时把该 flag 放在入口之前）。升级 Electron 无需再等上游白名单，但仍要重跑 `runtime:prepare`。
 2. **`--patch` 必须排在 web app 自己的参数之前**（`dsh web --patch <overlay> --host …`）。放在 `--host` 之后会被 commander 透传并报 `unknown option '--patch'`。
 3. **脱敏只作用于日志，绝不参与导航**：曾出现「先脱敏、后解析」把 `?token=***` 交给页面导致停在 401。
 4. **只绑定 loopback**，端口被占用即报错，不退回随机端口。
@@ -84,7 +83,7 @@ pnpm release:dry        # 发布演习：签名 + 自校验 + 生成 latest.json
 8. **旧版检测不要用 `reg query /d` 搜值数据**：Tauri 的卸载项登记在**键名**上（键名即 `DSH Desktop`），必须枚举子键名；排除自己时要用**卸载器所在目录**，因为 electron-builder 不往卸载键写 `InstallLocation`。
 9. **面板事件双白名单**：preload 只暴露 `event.emit` / `event.listen`，且事件名受限；主进程再校验发送方（主窗口主 frame + loopback 来源）与动作白名单。设置页要新增动作时，两处都要加。
 10. **任务查询失败一律按 `unknown` 处理**，绝不当成 `idle`——把「查不到」当「没任务」会丢掉用户正在跑的 agent。
-11. **改了 `runtime-pin.json` 或 `electron` 版本后必须重跑 `pnpm runtime:prepare`**：随包 dsh 的原生插件只接受白名单里的精确 V8 指纹，不匹配时 dsh 会以 `Unsupported/no-context` 启动失败。构建脚本会拦住这种情况。
+11. **改了 `runtime-pin.json` 或 `electron` 版本后必须重跑 `pnpm runtime:prepare`**：`desktop-runtime.json` 记录 electron/node 版本与替身的哈希，运行期 `runtime-tree.ts` 会比对；替身由 `prepare-runtime` 写入并计入 critical，缺了 `--expose-internals` 或替身被换掉都会在启动/打包校验时暴露。
 12. **裁剪规则只做减法验证是不够的**：`prepare-runtime.mjs` 裁完必须跑通 `dsh --version` 与 `dsh web --help`。第一版规则里一个 `docs?` 就把 `yaml/dist/doc/directives.js` 删了。
 13. **`extraResources` 指向的目录若根层有 `node_modules`，必须单独再加一条**，否则 electron-builder 静默不拷贝它、退出码仍是 0。`pnpm verify:package` 会抓住这个。
 14. **profile 名不能叫 `desktop`**：dsh 的启动器硬编码保留该名字给官方 Electron 应用（引导与 `dsh plugin` 两处都拦）。我们用的是 `dsh-desktop`。

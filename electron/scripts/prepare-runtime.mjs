@@ -114,34 +114,45 @@ if (force || !upToDate) {
 const stagedNodeModules = join(staging, 'node_modules')
 if (!existsSync(stagedNodeModules)) fail('安装后找不到 node_modules')
 
-// 2. Build-time guard: the addon must whitelist the Electron we ship.
-log('==> 校验原生插件与 Electron 的 V8 指纹')
-const v8 = execFileSync(
+// 2. Replace dsh's native module loader with the shell's own stand-in.
+//
+// dsh resolves Node's internal modules through `node-addon-require-builtin`, a prebuilt addon
+// whose embedded table accepts only a few Electron builds (43.0.0, 44.0.0, 44.7.0,
+// 45.0.0-alpha.6). That table is what pinned the shell to one Electron release: 44.10.0 ships
+// Node 24.22.1 (the October 2026 security release) but a V8 string the addon rejects, and dsh
+// died at boot with `Unsupported/no-context`.
+//
+// The addon's one capability is resolving `internal/*` without a flag. Node's supported route is
+// `--expose-internals`, which the shell passes before the dsh entry (host-process.ts), so the
+// runtime ships a CommonJS stand-in under the same package name: dsh's call site stays intact
+// and the Electron/V8 pair stops being an input to the runtime. The trade-off — the flag is
+// process-wide, so in-process code can also reach internals — is recorded in the note.
+log('==> 用 shell 自带替身替换 dsh 的原生模块加载器')
+const stubSource = join(root, 'runtime-overrides', 'node-addon-require-builtin')
+if (!existsSync(join(stubSource, 'package.json'))) fail(`缺少 addon 替身：${stubSource}`)
+const addonFamily = /^node-addon-(?:require-builtin|native-custom-loader)(?:-|$)/u
+for (const name of readdirSync(stagedNodeModules).filter((name) => addonFamily.test(name))) {
+  rmSync(join(stagedNodeModules, name), { recursive: true, force: true })
+}
+const stubTarget = join(stagedNodeModules, 'node-addon-require-builtin')
+mkdirSync(stubTarget, { recursive: true })
+for (const file of readdirSync(stubSource)) cpSync(join(stubSource, file), join(stubTarget, file))
+const stubManifest = JSON.parse(readFileSync(join(stubTarget, 'package.json'), 'utf8'))
+if (stubManifest.dshRuntimeStub !== true) fail(`addon 替身缺少 dshRuntimeStub 标记：${stubTarget}`)
+const leftover = readdirSync(stagedNodeModules)
+  .filter((name) => addonFamily.test(name) && name !== 'node-addon-require-builtin')
+if (leftover.length > 0) fail(`替换后仍残留 dsh 的原生模块加载器：${leftover.join(', ')}`)
+
+// The Electron build's V8 and Node versions stay in the manifest for diagnostics and for the
+// app/runtime pairing check; nothing is gated on the addon's fingerprint table any more.
+const electronRuntime = execFileSync(
   join(root, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron'),
-  ['-p', 'process.versions.v8'],
+  ['-p', 'JSON.stringify({ v8: process.versions.v8, node: process.versions.node })'],
   { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true },
 ).toString().trim()
-log(`    Electron ${electronVersion} → V8 ${v8}`)
-
-const addonPattern = /node-addon-require-builtin-/
-const addonFiles = []
-const walk = (directory) => {
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    const path = join(directory, entry.name)
-    if (entry.isDirectory()) walk(path)
-    else if (entry.isFile() && entry.name.endsWith('.node') && addonPattern.test(path)) addonFiles.push(path)
-  }
-}
-walk(stagedNodeModules)
-if (addonFiles.length === 0) fail('随包运行时里找不到 node-addon-require-builtin 的预构建二进制')
-const whitelisted = addonFiles.some((path) => readFileSync(path).includes(Buffer.from(v8, 'utf8')))
-if (!whitelisted) {
-  fail(
-    `随包 dsh 的原生插件不接受 Electron ${electronVersion}（V8 ${v8}）。\n`
-    + '这会让 dsh 以 Unsupported/no-context 启动失败。请调整 runtime-pin.json 里的 dsh 版本或 electron 版本。',
-  )
-}
-log(`    ✔ 白名单包含该指纹（检查了 ${String(addonFiles.length)} 个原生模块）`)
+const { v8, node: electronNode } = JSON.parse(electronRuntime)
+log(`    Electron ${electronVersion} → Node ${electronNode} / V8 ${v8}`)
+log('    ✔ 替身就位，Electron 版本不再参与白名单校验')
 
 // 3. Copy the pristine cache to the packaged location, then prune the copy.
 //
@@ -246,10 +257,12 @@ const prunedEntry = join(output, 'node_modules/@deepseek-ai/dsh/lib/bin.js')
 const nodeMode = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
 const electronBinary = join(root, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron')
 try {
-  const printed = execFileSync(electronBinary, [prunedEntry, '--version'], { env: nodeMode, windowsHide: true }).toString().trim()
+  // `--expose-internals` before the entry: the shell's stub module loader resolves `internal/*`
+  // through it (the same flag `host-process.ts` passes at runtime).
+  const printed = execFileSync(electronBinary, ['--expose-internals', prunedEntry, '--version'], { env: nodeMode, windowsHide: true }).toString().trim()
   if (!printed.includes(dshVersion)) fail(`裁剪后的运行时 --version 输出异常：${printed}`)
   // `web --help` composes the profile and loads the plugin set: a broader load test.
-  execFileSync(electronBinary, [prunedEntry, 'web', '--help'], { env: nodeMode, windowsHide: true, stdio: 'pipe' })
+  execFileSync(electronBinary, ['--expose-internals', prunedEntry, 'web', '--help'], { env: nodeMode, windowsHide: true, stdio: 'pipe' })
 } catch (error) {
   fail(`裁剪后的运行时无法加载，说明裁剪规则删掉了运行期需要的文件：\n${String(error)}`)
 }
@@ -460,6 +473,10 @@ for (const file of files) {
   if (file === entryRelative
     || file === 'bin/pnpm.cmd'
     || file === 'bin/node.cmd'
+    // The module-loader stand-in runs inside the dsh process; a swapped-out copy would
+    // change what dsh can require, so it belongs in the integrity set.
+    || file === 'node_modules/node-addon-require-builtin/index.js'
+    || file === 'node_modules/node-addon-require-builtin/package.json'
     || file.endsWith('.node') || file.endsWith('.dll') || file.endsWith('.exe')) {
     critical[file] = sha256(join(output, file))
   }
@@ -507,8 +524,10 @@ const manifest = {
   pnpm: pnpmVersion,
   electron: electronVersion,
   v8,
-  /** The Electron process's own node — what `dsh` itself runs on. */
-  node: process.versions.node,
+  /** The Electron process's own node — what `dsh` itself runs on. Queried from the binary, not
+   *  from this script's own `process.versions.node` (they differ: the build machine can run a
+   *  different node than the Electron we ship). */
+  node: electronNode,
   /** The real `node.exe` packaged in `bin/`, used for pnpm and package scripts. */
   nodeRuntime: nodeRuntimeVersion,
   platform: targetPlatform,

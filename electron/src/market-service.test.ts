@@ -100,7 +100,10 @@ test('the real bundled runtime runs pnpm with no shell and no window', { skip: !
     timeoutMs: 120_000,
   })
   assert.equal(result.code, 0, result.output)
-  assert.match(result.output.trim(), /^\d+\.\d+\.\d+/u)
+  // pnpm 11 prints a "the pnpm field is ignored" warning on checkout manifests; the version
+  // itself is the line this test is about, so drop warning lines before matching.
+  const version = result.output.split(/\r?\n/).filter(line => !line.startsWith('[WARN]')).join('\n').trim()
+  assert.match(version, /^\d+\.\d+\.\d+/u)
 })
 
 test('a node executable that does not exist is reported, not thrown', async () => {

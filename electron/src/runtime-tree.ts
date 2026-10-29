@@ -101,8 +101,10 @@ export function verifyRuntime(options: {
       detail: `运行时为 ${manifest.platform}-${manifest.arch}，当前为 ${options.platform}-${options.arch}`,
     }
   }
-  // The bundled runtime is released with one exact Electron, whose V8 fingerprint the
-  // bundled native addon whitelists. A different Electron cannot load it.
+  // The bundled runtime is released against one exact Electron. `prepare-runtime` replaces
+  // dsh's native module loader with a shell-owned stand-in, so the V8 fingerprint no longer
+  // decides whether the runtime loads — but the Electron version in the manifest still has to
+  // match the app that ships it.
   if (manifest.electron !== options.electron) {
     return {
       ok: false,

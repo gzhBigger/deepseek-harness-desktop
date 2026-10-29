@@ -367,7 +367,9 @@ async function verifyProfileComposition() {
     }
 
     const dshEntry = join(resources, 'app.asar', 'dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
-    const dump = spawnSync(appExecutable, [dshEntry, '--profile', 'dsh-desktop', '--dump-config'], {
+    // `--expose-internals` before the entry: the packaged runtime uses the shell's module-loader
+    // stand-in instead of the upstream native addon.
+    const dump = spawnSync(appExecutable, ['--expose-internals', dshEntry, '--profile', 'dsh-desktop', '--dump-config'], {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_HOME: home },
       encoding: 'utf8',
       windowsHide: true,
