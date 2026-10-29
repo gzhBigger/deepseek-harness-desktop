@@ -19,13 +19,22 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { readFile, rename, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const name = 'desktop-shell';
 
 export const inject = [];
 
 const ROUTE = '/dsh-desktop-shell/v1';
+/**
+ * 引导插画（settings-account 的 8 张 webp）由桌面壳构建阶段从 bundle 里搬出来，落在这里。
+ * 名字里的内容是哈希，因此可以按 immutable 缓存；改图会换名字，不会读到旧图。
+ */
+const ONBOARDING_PREFIX = `${ROUTE}/onboarding/`;
+const ONBOARDING_FILE = /^[a-z0-9]+(?:-[a-z0-9]+)*\.webp$/u;
+const CACHE_IMMUTABLE = 'public, max-age=31536000, immutable';
+const SHELL_DIR = dirname(fileURLToPath(import.meta.url));
 const FACTS_FILENAME = 'desktop-facts.json';
 const SETTINGS_FILENAME = 'shell-settings.json';
 const AUTH_PROBE_TIMEOUT_MS = 2000;
@@ -77,6 +86,44 @@ function sameOrigin(req, host) {
   } catch {
     return false;
   }
+}
+
+/**
+ * 引导插画：桌面壳构建阶段从 settings-account bundle 里搬出来的 8 张 webp。
+ *
+ * 这几张图**不**走 `sameOrigin` + 认证回探：它们是页面里 `<img src>` 直接取的静态素材，
+ * 每张图回探一次 `GET /` 会把首屏的几个请求变成十几个。匿名可读的代价为零——图片本来就会
+ * 随页面发出去，路径又被白名单钉死在 `onboarding/*.webp`，而认证回探的价值是保护**写操作**。
+ */
+async function serveOnboardingAsset(req, res, pathname) {
+  const fileName = pathname.slice(ONBOARDING_PREFIX.length);
+  if (!ONBOARDING_FILE.test(fileName)) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('not found');
+    return;
+  }
+  let body;
+  try {
+    body = await readFile(join(SHELL_DIR, 'onboarding', fileName));
+  } catch {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('not found');
+    return;
+  }
+  // 文件名里带内容哈希，所以同一个 URL 的内容永不改变。
+  const etag = `"${fileName}"`;
+  if (req.headers['if-none-match'] === etag) {
+    res.writeHead(304, { etag, 'cache-control': CACHE_IMMUTABLE });
+    res.end();
+    return;
+  }
+  res.writeHead(200, {
+    'content-type': 'image/webp',
+    'content-length': body.length,
+    'cache-control': CACHE_IMMUTABLE,
+    etag,
+  });
+  res.end(req.method === 'HEAD' ? undefined : body);
 }
 
 /** 复用 DSH 自身认证：带请求 Cookie 回探 `GET /`，200 视为已认证，401 视为未认证。 */
@@ -481,6 +528,11 @@ export function apply(ctx, config) {
           });
         }
 
+        // 引导插画是页面里的静态素材，匿名取用（见 serveOnboardingAsset 的注释）。
+        if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname.startsWith(ONBOARDING_PREFIX)) {
+          return serveOnboardingAsset(req, res, url.pathname);
+        }
+
         if (host === undefined || !sameOrigin(req, host)) {
           return sendJson(res, 403, { ok: false, error: 'cross-origin' });
         }
@@ -572,6 +624,8 @@ export function apply(ctx, config) {
         return sendJson(res, 404, { ok: false, error: 'not-found' });
       },
     });
-    console.log(`[dsh-desktop-shell] 已注册路由 ${ROUTE}/*（除 ping 外均需 DSH 会话认证）`);
+    console.log(
+      `[dsh-desktop-shell] 已注册路由 ${ROUTE}/*（ping 与 onboarding 插画匿名，其余需 DSH 会话认证）`,
+    );
   });
 }

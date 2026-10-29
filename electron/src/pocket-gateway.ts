@@ -19,7 +19,7 @@
 
 import { createServer, request as httpRequest, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { Socket } from 'node:net'
-import { createGzip } from 'node:zlib'
+import { constants as zlibConstants, createBrotliCompress, createGzip } from 'node:zlib'
 import type { Duplex } from 'node:stream'
 
 import { constantTimeEqual, readCookie, type PocketRateLimiter, type PocketSessions } from './pocket-auth.ts'
@@ -37,23 +37,66 @@ const COMPRESS_MIN_BYTES = 1024
 const COMPRESSIBLE = /^(?:text\/|application\/(?:json|javascript|xml|x-ndjson|manifest\+json)|image\/svg)/iu
 
 /**
- * Does this request accept gzip?
+ * Brotli quality for on-the-fly compression.
+ *
+ * 5 compresses the client's JavaScript to within a few percent of quality 9 at a fraction of the
+ * CPU: this gateway runs inside the desktop app, next to the thing producing the bytes.
+ */
+const BROTLI_QUALITY = 5
+
+/**
+ * Does this request accept one named content coding?
  *
  * Parsed rather than regex-matched because `q=0` means "explicitly not", and `*` means "anything".
  *
  * @param header - The `accept-encoding` header, if any.
- * @returns True when gzip is acceptable.
+ * @param coding - The coding to look for, lower-case (`gzip`, `br`).
+ * @returns True when that coding is acceptable.
  */
-export function acceptsGzip(header: string | readonly string[] | undefined): boolean {
+function acceptsEncoding(header: string | readonly string[] | undefined, coding: string): boolean {
   const raw = header === undefined ? '' : typeof header === 'string' ? header : header.join(',')
   for (const part of raw.split(',')) {
     const [name = '', ...params] = part.trim().toLowerCase().split(';')
-    if (name !== 'gzip' && name !== '*') continue
+    if (name !== coding && name !== '*') continue
     const q = params.map((param: string) => param.trim()).find((param: string) => param.startsWith('q='))
     if (q !== undefined && Number(q.slice(2)) === 0) continue
     return true
   }
   return false
+}
+
+/**
+ * Does this request accept gzip?
+ *
+ * @param header - The `accept-encoding` header, if any.
+ * @returns True when gzip is acceptable.
+ */
+export function acceptsGzip(header: string | readonly string[] | undefined): boolean {
+  return acceptsEncoding(header, 'gzip')
+}
+
+/**
+ * Does this request accept brotli? Browsers send `br` in the same header; Safari needs a TLS
+ * connection to advertise it, which is exactly how phones reach this gateway.
+ *
+ * @param header - The `accept-encoding` header, if any.
+ * @returns True when brotli is acceptable.
+ */
+export function acceptsBrotli(header: string | readonly string[] | undefined): boolean {
+  return acceptsEncoding(header, 'br')
+}
+
+/**
+ * Pick the best content coding this request accepts, brotli first: it is ~8–10% smaller than gzip
+ * on the client's JavaScript and every byte crosses a phone radio.
+ *
+ * @param header - The `accept-encoding` header, if any.
+ * @returns `br`, `gzip`, or undefined when the request takes the bytes as they are.
+ */
+export function chooseEncoding(header: string | readonly string[] | undefined): 'br' | 'gzip' | undefined {
+  if (acceptsBrotli(header)) return 'br'
+  if (acceptsGzip(header)) return 'gzip'
+  return undefined
 }
 
 /**
@@ -372,7 +415,8 @@ export async function createPocketGateway(options: PocketGatewayOptions): Promis
 
       const status = upstreamResponse.statusCode ?? 502
       const declaredLength = Number(upstreamResponse.headers['content-length'] ?? Number.NaN)
-      const compress = acceptsGzip(request.headers['accept-encoding'])
+      const encoding = chooseEncoding(request.headers['accept-encoding'])
+      const compress = encoding !== undefined
         && upstreamResponse.headers['content-encoding'] === undefined
         && COMPRESSIBLE.test(String(upstreamResponse.headers['content-type'] ?? ''))
         && !(Number.isFinite(declaredLength) && declaredLength < COMPRESS_MIN_BYTES)
@@ -383,11 +427,15 @@ export async function createPocketGateway(options: PocketGatewayOptions): Promis
         // A phone on mobile data is the whole point of this listener: the client's own bundles and a
         // long session payload are the two biggest things crossing it.
         delete outgoing['content-length']
-        outgoing['content-encoding'] = 'gzip'
+        outgoing['content-encoding'] = encoding === 'br' ? 'br' : 'gzip'
         outgoing['vary'] = mergeVary(upstreamResponse.headers.vary, 'accept-encoding')
       }
       response.writeHead(status, outgoing)
-      if (compress) upstreamResponse.pipe(createGzip()).pipe(response)
+      if (compress && encoding === 'br') {
+        upstreamResponse
+          .pipe(createBrotliCompress({ params: { [zlibConstants.BROTLI_PARAM_QUALITY]: BROTLI_QUALITY } }))
+          .pipe(response)
+      } else if (compress) upstreamResponse.pipe(createGzip()).pipe(response)
       else upstreamResponse.pipe(response)
     })
     upstream.on('error', error => {

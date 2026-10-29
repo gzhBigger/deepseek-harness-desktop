@@ -118,3 +118,7 @@ DSH 的 WebSocket 通道是 **`/api/remote.mux`**（`@deepseek-ai/dsh-api-gatewa
 公网隧道（P3）、Android APK（P2）、移动布局（P4）与发版集成（P5）的计划见
 [proposed: 手机访问 + APK](../../proposed/feature/2026-10-16-phone-access-and-apk.md)。
 本笔记只锁定已经落地的局域网网关的契约；隧道口将复用同一套认证与生命周期，但**必须是另一个监听器**。
+
+首屏体积与缓存（把引导插画搬出 settings-account bundle、网关 br 压缩）另见
+[2026-10-29 手机首屏瘦身](./2026-10-29-phone-first-load-slimming.md)。
+

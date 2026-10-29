@@ -441,6 +441,19 @@ const entryRelative = 'node_modules/@deepseek-ai/dsh/lib/bin.js'
 const entryPath = join(output, entryRelative)
 if (!existsSync(entryPath)) fail(`随包运行时缺少入口 ${entryRelative}`)
 
+// 引导插画外置：settings-account 的 bundle 把 8 张 webp 内联成 3.4 MB，而 DSH 的模块装载器
+// 把每个模块的完整源码塞进**启动批次**，手机不打开设置页也要下载它。这里改写随包产物的
+// 那一份（图片落到桌面壳的 extraResources 目录，由它的 web 路由按 immutable 缓存提供）。
+// 必须在清单枚举之前跑：bundle 被改写后大小变了，清单得记录新的那份。
+const { patchOnboardingAssets } = await import('../src/onboarding-assets.ts')
+const shellResourceDir = join(root, 'resources', 'dsh-desktop-shell')
+const slimmed = patchOnboardingAssets({ runtimeDir: output, shellDir: shellResourceDir })
+if (!slimmed.patched) fail(`settings-account 的引导插画没有内联 webp 可外置：${slimmed.bundlePath}`)
+log(
+  `    ✔ 引导插画外置：${String(slimmed.assetCount)} 张 / ${mib(slimmed.assetBytes)}，` +
+    `settings-account bundle ${mib(slimmed.bundleBytesBefore)} → ${mib(slimmed.bundleBytesAfter)}`,
+)
+
 const files = []
 /** The manifest describes the tree; it is not part of it. Re-running prepare leaves the previous
  *  run's copy behind, and counting it made the packaged file count off by one — which

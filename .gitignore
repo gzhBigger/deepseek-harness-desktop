@@ -42,4 +42,8 @@ electron/resources/cloudflared/
 # workspace; committing compiled copies would fork them from their source.
 electron/resources/plugins/
 
+# 引导插画由 scripts/prepare-runtime.mjs 从随包 settings-account bundle 里搬出来（内容寻址文件名），
+# 属于构建产物；提交 2.3 MB 二进制只会与上游产物脱节。
+electron/resources/dsh-desktop-shell/onboarding/
+
 electron/pnpm-workspace.yaml

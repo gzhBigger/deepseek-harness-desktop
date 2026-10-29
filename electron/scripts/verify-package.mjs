@@ -140,6 +140,30 @@ if (packaged.dsh !== expected.dsh || packaged.listDigest !== expected.listDigest
   fail(`随包运行时与源不一致（dsh ${String(packaged.dsh)} vs ${String(expected.dsh)}）`)
 }
 
+// 手机首屏瘦身：settings-account 的 8 张引导插画必须已经搬出 bundle，并且真的随安装包发出去了。
+// 少了这一步，手机每次打开页面都要多下 3 MB —— 不报错，只是慢，所以只能在这里钉住。
+const { ONBOARDING_IMAGE_COUNT, ONBOARDING_ROUTE } = await import('../src/onboarding-assets.ts')
+const settingsAccountBundle = join('dsh', 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-account', 'lib', 'client.js')
+let settingsAccountText = ''
+try {
+  settingsAccountText = (await archive.readFile(settingsAccountBundle)).toString('utf8')
+} catch (error) {
+  fail(`app.asar 里没有 settings-account 客户端包 ${settingsAccountBundle}：${String(error)}`)
+}
+if (settingsAccountText.includes('data:image/webp;base64,')) {
+  fail('settings-account 的引导插画仍内联在 bundle 里（prepare-runtime 的外置步骤没生效）')
+}
+const onboardingFiles = [
+  ...settingsAccountText.matchAll(new RegExp(`${ONBOARDING_ROUTE}/([a-z0-9-]+\\.webp)`, 'gu')),
+].map((match) => match[1] ?? '')
+if (onboardingFiles.length !== ONBOARDING_IMAGE_COUNT) {
+  fail(`settings-account bundle 里引用了 ${String(onboardingFiles.length)} 张引导插画，期望 ${String(ONBOARDING_IMAGE_COUNT)} 张`)
+}
+for (const fileName of onboardingFiles) {
+  const path = join(resources, 'dsh-desktop-shell', 'onboarding', fileName)
+  if (!existsSync(path)) fail(`桌面壳资源里缺少引导插画 ${fileName}（extraResources 没带上）`)
+}
+
 // Walk the archive the same way the runtime verification does: every file under `dsh/`.
 const archived = []
 const collect = (node, path) => {

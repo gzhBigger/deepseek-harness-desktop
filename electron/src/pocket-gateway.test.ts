@@ -2,11 +2,11 @@ import assert from 'node:assert/strict'
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { connect } from 'node:net'
 import type { Duplex } from 'node:stream'
-import { gunzipSync } from 'node:zlib'
+import { brotliDecompressSync, gunzipSync } from 'node:zlib'
 import { after, test } from 'node:test'
 
 import { createPocketRateLimiter, createPocketSessions } from './pocket-auth.ts'
-import { POCKET_COOKIE, POCKET_MARKER_HEADER, acceptsGzip, createPocketGateway, type PocketGateway } from './pocket-gateway.ts'
+import { POCKET_COOKIE, POCKET_MARKER_HEADER, acceptsBrotli, acceptsGzip, chooseEncoding, createPocketGateway, type PocketGateway } from './pocket-gateway.ts'
 
 /** What the stub upstream saw, so the rewrite rules can be asserted rather than assumed. */
 interface Seen {
@@ -503,6 +503,24 @@ test('a client that does not ask for gzip gets the bytes as they are', async () 
   assert.equal(plain.body.toString('utf8'), bigBody)
 })
 
+test('brotli wins when the phone offers both, and arrives intact', async () => {
+  const upstream = await startTextUpstream({ body: bigBody, type: 'application/javascript' })
+  const compressed = await fetchThrough(upstream.port, { acceptEncoding: 'br, gzip, deflate' })
+  assert.equal(compressed.status, 200)
+  assert.equal(compressed.headers['content-encoding'], 'br')
+  assert.equal(compressed.headers['content-length'], undefined)
+  assert.match(String(compressed.headers.vary), /accept-encoding/iu)
+  assert.ok(compressed.body.length < bigBody.length / 4, `brotli 也应显著更小：${String(compressed.body.length)}`)
+  assert.equal(brotliDecompressSync(compressed.body).toString('utf8'), bigBody, '解压后必须与原文逐字节一致')
+})
+
+test('br with q=0 falls back to gzip instead of dropping compression', async () => {
+  const upstream = await startTextUpstream({ body: bigBody, type: 'application/javascript' })
+  const answer = await fetchThrough(upstream.port, { acceptEncoding: 'br;q=0, gzip' })
+  assert.equal(answer.headers['content-encoding'], 'gzip')
+  assert.equal(gunzipSync(answer.body).toString('utf8'), bigBody)
+})
+
 test('gzip with q=0 means no, and small or already-encoded bodies are left alone', async () => {
   const upstream = await startTextUpstream({ body: bigBody, type: 'application/javascript' })
   const refused = await fetchThrough(upstream.port, { acceptEncoding: 'gzip;q=0' })
@@ -534,6 +552,16 @@ test('accept-encoding parsing handles the real header shapes', () => {
   assert.equal(acceptsGzip('br, deflate'), false)
   assert.equal(acceptsGzip(undefined), false)
   assert.equal(acceptsGzip(['br', 'gzip']), true)
+
+  assert.equal(acceptsBrotli('br'), true)
+  assert.equal(acceptsBrotli('gzip, deflate'), false)
+  assert.equal(acceptsBrotli('br;q=0'), false)
+  assert.equal(acceptsBrotli('*'), true)
+
+  assert.equal(chooseEncoding('br, gzip, deflate'), 'br')
+  assert.equal(chooseEncoding('gzip, deflate'), 'gzip')
+  assert.equal(chooseEncoding('identity'), undefined)
+  assert.equal(chooseEncoding('br;q=0'), undefined)
 })
 
 test('every answer carries the marker that says "this really is the gateway"', async () => {
