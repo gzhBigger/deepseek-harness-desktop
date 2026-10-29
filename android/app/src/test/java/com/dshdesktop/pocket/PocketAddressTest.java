@@ -126,8 +126,8 @@ public final class PocketAddressTest {
   public void aUrlWithAPathIsNotAnAddress() {
     // 真机报障：桌面新增的「下载 App」二维码是 GitHub 链接，扫码器丢掉路径后变成了
     // `https://github.com:443/`，用户看到的「本机地址」根本不是他的电脑。
-    assertNull(PocketAddress.normalise("https://github.com/gzh330205/deepseek-harness-desktop/releases/latest/download/DSH.Pocket.apk"));
-    assertNull(PocketAddress.normalise("https://github.com:443/gzh330205/x"));
+    assertNull(PocketAddress.normalise("https://github.com/gzhBigger/deepseek-harness-desktop/releases/latest/download/DSH.Pocket.apk"));
+    assertNull(PocketAddress.normalise("https://github.com:443/gzhBigger/x"));
     assertNull(PocketAddress.normalise("http://192.168.1.7:41730/anything"));
     // 末尾一个斜杠仍然是一个地址（扫码结果常见）
     assertEquals("http://192.168.1.7:41730/", PocketAddress.normalise("http://192.168.1.7:41730/"));

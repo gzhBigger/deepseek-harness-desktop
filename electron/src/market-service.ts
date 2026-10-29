@@ -36,7 +36,7 @@ export const FETCH_TIMEOUT_MS = 20_000
 /** pnpm can legitimately take minutes on a cold store; the action UI stays cancellable. */
 export const PNPM_TIMEOUT_MS = 15 * 60_000
 /** Registry requests must identify themselves; npm blocks anonymous-looking bulk traffic. */
-export const USER_AGENT = 'dsh-desktop-market/1.0 (+https://github.com/gzh330205/deepseek-harness-desktop)'
+export const USER_AGENT = 'dsh-desktop-market/1.0 (+https://github.com/gzhBigger/deepseek-harness-desktop)'
 
 /** A JSON GET that fails loudly instead of returning `undefined` on an HTTP error. */
 export type JsonFetcher = (url: string) => Promise<unknown>

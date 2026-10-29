@@ -22,7 +22,7 @@ import { verifyMinisign } from '../src/minisign.ts'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = resolve(root, '..')
 const manifestUrl = process.argv[2]
-  ?? 'https://github.com/gzh330205/deepseek-harness-desktop/releases/latest/download/latest.json'
+  ?? 'https://github.com/gzhBigger/deepseek-harness-desktop/releases/latest/download/latest.json'
 const publicKey = JSON.parse(readFileSync(join(repoRoot, 'electron', 'update-key.json'), 'utf8')).pubkey
 
 const workDir = mkdtempSync(join(tmpdir(), 'dsh-verify-published-'))

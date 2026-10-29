@@ -30,7 +30,7 @@ import { verifyMinisign } from '../src/minisign.ts'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = resolve(root, '..')
-const REPO = 'gzh330205/deepseek-harness-desktop'
+const REPO = 'gzhBigger/deepseek-harness-desktop'
 
 const args = process.argv.slice(2)
 const version = args.find(argument => !argument.startsWith('--') && /^\d+\.\d+\.\d+/u.test(argument))

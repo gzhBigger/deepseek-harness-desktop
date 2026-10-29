@@ -555,7 +555,7 @@ function showAbout(): void {
     chrome: process.versions.chrome,
     node: process.versions.node,
     uptimeMs: Date.now() - startedAt,
-    repository: 'github.com/gzh330205/deepseek-harness-desktop',
+    repository: 'github.com/gzhBigger/deepseek-harness-desktop',
   })
   const options = {
     type: 'none' as const,

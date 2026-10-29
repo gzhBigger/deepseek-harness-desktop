@@ -53,8 +53,8 @@ const snapshot = {
     ],
     selected: '192.168.1.7',
     qr: pocketQrDataUrl(lanUrl),
-    apkUrl: 'https://github.com/gzh330205/deepseek-harness-desktop/releases/latest/download/DSH.Pocket.apk',
-    apkQr: pocketQrDataUrl('https://github.com/gzh330205/deepseek-harness-desktop/releases/latest/download/DSH.Pocket.apk', { cellSize: 3 }),
+    apkUrl: 'https://github.com/gzhBigger/deepseek-harness-desktop/releases/latest/download/DSH.Pocket.apk',
+    apkQr: pocketQrDataUrl('https://github.com/gzhBigger/deepseek-harness-desktop/releases/latest/download/DSH.Pocket.apk', { cellSize: 3 }),
     publicAccess: {
       enabled: true,
       running: true,

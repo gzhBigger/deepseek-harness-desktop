@@ -18,7 +18,7 @@
 
 ## 1. 项目概述（Tauri 壳，旧版）
 
-基于 **Tauri 2**（Rust 外壳 + Vite/TypeScript 前端）的 DeepSeek Harness（DSH）桌面端。应用**总是启动自己托管的 DSH Web 服务**（仅 loopback，固定端口 `41729`，可用环境变量 `DSH_DESKTOP_PORT` 覆盖），随后把 WebView 导航至该地址；不再发现或复用本机已有的 DSH 实例。启动前先过三道闸门——DSH 版本 ≥ 认证基线、`dsh --help` 含 `--patch`、固定端口可用——任一不满足都不启动服务，并在启动页给出原因与升级入口。桌面端还会通过 `--patch` overlay 向 DSH 注入自带的面板插件 `dsh-desktop-shell`：桌面壳的设置界面是**壳自己的设置窗口**（`electron/src/settings-window.ts`），设置的真相源是桌面壳的 `shell-settings.json`。仓库：`https://github.com/gzh330205/deepseek-harness-desktop`（**必须保持公开**，桌面程序的自动更新依赖匿名下载 Release 资产）。
+基于 **Tauri 2**（Rust 外壳 + Vite/TypeScript 前端）的 DeepSeek Harness（DSH）桌面端。应用**总是启动自己托管的 DSH Web 服务**（仅 loopback，固定端口 `41729`，可用环境变量 `DSH_DESKTOP_PORT` 覆盖），随后把 WebView 导航至该地址；不再发现或复用本机已有的 DSH 实例。启动前先过三道闸门——DSH 版本 ≥ 认证基线、`dsh --help` 含 `--patch`、固定端口可用——任一不满足都不启动服务，并在启动页给出原因与升级入口。桌面端还会通过 `--patch` overlay 向 DSH 注入自带的面板插件 `dsh-desktop-shell`：桌面壳的设置界面是**壳自己的设置窗口**（`electron/src/settings-window.ts`），设置的真相源是桌面壳的 `shell-settings.json`。仓库：`https://github.com/gzhBigger/deepseek-harness-desktop`（**必须保持公开**，桌面程序的自动更新依赖匿名下载 Release 资产）。
 
 ## 2. 关键约束（改动前必读）
 
@@ -42,7 +42,7 @@
 
 ## 3. 发版规范（GitHub Release + 自动更新）
 
-发布采用**本地一键脚本**（参考 md-editor 的发布流程）：本机打包（NSIS + MSI，含 updater 签名）→ 生成 `latest.json` → 用 GitHub CLI 创建 Release 并上传资产。桌面程序启动时从 `https://github.com/gzh330205/deepseek-harness-desktop/releases/latest/download/latest.json` 检查新版本，用户确认后下载、验签并静默安装（Tauri updater 插件）。
+发布采用**本地一键脚本**（参考 md-editor 的发布流程）：本机打包（NSIS + MSI，含 updater 签名）→ 生成 `latest.json` → 用 GitHub CLI 创建 Release 并上传资产。桌面程序启动时从 `https://github.com/gzhBigger/deepseek-harness-desktop/releases/latest/download/latest.json` 检查新版本，用户确认后下载、验签并静默安装（Tauri updater 插件）。
 
 ### 3.1 前置条件（一次性）
 
@@ -89,13 +89,13 @@ git add -A && git commit -m "chore: release v0.2.8" && git push
 
 ```bash
 # 更新清单匿名可访问，且 version 为新版本：
-curl -sL https://github.com/gzh330205/deepseek-harness-desktop/releases/latest/download/latest.json
+curl -sL https://github.com/gzhBigger/deepseek-harness-desktop/releases/latest/download/latest.json
 
 # 清单内 url 字段指向的安装包匿名可下载（应返回 200）：
 curl -sIL "<清单中的 url>"
 ```
 
-- 确认 Release 页存在且资产完整：`gh release view v0.2.8 --repo gzh330205/deepseek-harness-desktop`。
+- 确认 Release 页存在且资产完整：`gh release view v0.2.8 --repo gzhBigger/deepseek-harness-desktop`。
 - 确认 `latest.json` 中的 `signature` 与 `url` 配套（同一构建产物），否则用户端验签失败。
 - 确认 Release 页 notes 已包含本次改动内容；若描述有误可用 `gh release edit v<版本> --notes "…"` 修正（仅改说明元数据，不动资产）。
 

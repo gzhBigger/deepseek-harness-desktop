@@ -26,7 +26,7 @@ const base = {
   chrome: '130.0.6723.58',
   node: '24.18.1',
   uptimeMs: 5 * 60_000,
-  repository: 'github.com/gzh330205/deepseek-harness-desktop',
+  repository: 'github.com/gzhBigger/deepseek-harness-desktop',
 } as const
 
 test('the dialog leads with the product and version', () => {
@@ -44,7 +44,7 @@ test('the body answers the questions About is opened for', () => {
   // The very first launch is the most likely moment to open About.
   assert.match(buildAbout({ ...base, uptimeMs: 3_000 }).detail, /刚刚启动/u)
   assert.match(detail, /Electron 44\.0\.0 · Chromium 130\.0\.6723\.58 · Node 24\.18\.1/u)
-  assert.match(detail, /github\.com\/gzh330205\/deepseek-harness-desktop/u)
+  assert.match(detail, /github\.com\/gzhBigger\/deepseek-harness-desktop/u)
 })
 
 test('internal details stay out of it', () => {

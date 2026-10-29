@@ -259,7 +259,7 @@ export const SHARED_USER_DATA_DIR_NAME = 'ai.deepseek.dsh-desktop'
 
 /** Update manifest. Same file the Tauri clients read, so one manifest serves both. */
 export const DEFAULT_UPDATE_MANIFEST_URL =
-  'https://github.com/gzh330205/deepseek-harness-desktop/releases/latest/download/latest.json'
+  'https://github.com/gzhBigger/deepseek-harness-desktop/releases/latest/download/latest.json'
 export const UPDATE_MANIFEST_URL_ENV = 'DSH_DESKTOP_UPDATE_MANIFEST_URL'
 /**
  * Where the Android client is downloaded from.
@@ -269,7 +269,7 @@ export const UPDATE_MANIFEST_URL_ENV = 'DSH_DESKTOP_UPDATE_MANIFEST_URL'
  * points at a version that has been superseded.
  */
 export const POCKET_APK_URL =
-  'https://github.com/gzh330205/deepseek-harness-desktop/releases/latest/download/DSH.Pocket.apk'
+  'https://github.com/gzhBigger/deepseek-harness-desktop/releases/latest/download/DSH.Pocket.apk'
 
 /*
  * Token usage (ONE-WAY): a shell window instead of a DSH-page plugin.

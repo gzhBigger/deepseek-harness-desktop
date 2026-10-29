@@ -66,7 +66,7 @@ cd electron && node scripts/minisign-roundtrip.mjs 8
 
 ## 4. Electron 侧更新流程（P3 实现规格）
 
-1. 取清单：`https://github.com/gzh330205/deepseek-harness-desktop/releases/latest/download/latest.json`
+1. 取清单：`https://github.com/gzhBigger/deepseek-harness-desktop/releases/latest/download/latest.json`
 2. 比较 `version` 与 `app.getVersion()`（semver，**只接受更高版本**；预发布排序沿用 `electron/src/gates.ts:compareVersions` 的规则）。
 3. 静默检查（启动后延迟 + 十进制的抖动退避，失败指数退避到 1 小时上限，成功后重置）。检查期间不弹窗。
 4. 用户确认后下载到 `app.getPath('userData')/updates/`，UI 显示百分比；支持取消与重试。
@@ -178,7 +178,7 @@ DSH Desktop_0.3.0_x64-setup.exe /P /R /UPDATE /ARGS "C:\...\dsh-desktop.exe"
 ```json
 {
   "version": "0.3.0",
-  "notes": "https://github.com/gzh330205/deepseek-harness-desktop/releases/tag/v0.3.0",
+  "notes": "https://github.com/gzhBigger/deepseek-harness-desktop/releases/tag/v0.3.0",
   "pub_date": "2026-09-28T00:00:00Z",
   "platforms": {
     "windows-x86_64": {

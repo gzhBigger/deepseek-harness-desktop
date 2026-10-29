@@ -38,7 +38,7 @@ adb install -r android/app/build/outputs/apk/release/app-release.apk
 
 APK 由桌面端的发布脚本一起打包上传（`electron/scripts/release-electron.mjs`）：它会构建、用 `aapt2` 读元数据、
 用 `apksigner` 确认 v2 签名，然后以**固定资产名** `DSH.Pocket.apk` 上传，于是
-`https://github.com/gzh330205/deepseek-harness-desktop/releases/latest/download/DSH.Pocket.apk` 永远指向最新版
+`https://github.com/gzhBigger/deepseek-harness-desktop/releases/latest/download/DSH.Pocket.apk` 永远指向最新版
 （设置页把它做成二维码，手机扫码就能装）。同一个 Release 的 `latest.json` 里也有 `apk` 段（版本、minSdk、
 sha256）。
 

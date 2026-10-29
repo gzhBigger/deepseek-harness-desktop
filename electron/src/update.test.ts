@@ -144,7 +144,7 @@ test('a manifest carrying the phone client still parses with the shipped reader'
   // a phone app must keep updating desktops exactly as before.
   const manifest = {
     version: '0.4.0',
-    notes: 'https://github.com/gzh330205/deepseek-harness-desktop/releases/tag/v0.4.0',
+    notes: 'https://github.com/gzhBigger/deepseek-harness-desktop/releases/tag/v0.4.0',
     pub_date: '2026-10-16T06:38:16Z',
     platforms: {
       'windows-x86_64': { signature, url: 'https://example.invalid/setup.exe' },
@@ -156,7 +156,7 @@ test('a manifest carrying the phone client still parses with the shipped reader'
       versionCode: 1,
       minSdk: 26,
       targetSdk: 34,
-      url: 'https://github.com/gzh330205/deepseek-harness-desktop/releases/latest/download/DSH.Pocket.apk',
+      url: 'https://github.com/gzhBigger/deepseek-harness-desktop/releases/latest/download/DSH.Pocket.apk',
       sha256: 'a'.repeat(64),
     },
   }
