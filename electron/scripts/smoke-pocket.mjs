@@ -54,6 +54,15 @@ const childEnvironment = { ...process.env }
 delete childEnvironment.ELECTRON_RUN_AS_NODE
 delete childEnvironment.ELECTRON_NO_ATTACH_CONSOLE
 
+// A dev tree resolves dsh from PATH unless a prepared runtime is named, so without this a smoke run
+// silently exercises whatever `dsh` happens to be installed globally (an older release, in practice).
+// Prefer the runtime this checkout just prepared; set the variable to an empty string to keep
+// testing PATH resolution on purpose.
+const preparedRuntime = join(root, 'runtime', 'dsh')
+if (executable === undefined && childEnvironment.DSH_DESKTOP_BUNDLED_RUNTIME === undefined && existsSync(preparedRuntime)) {
+  childEnvironment.DSH_DESKTOP_BUNDLED_RUNTIME = preparedRuntime
+}
+
 /** Phone access on, DSH on a spare port, in a directory nobody else touches. */
 writeFileSync(settingsPath, `${JSON.stringify({
   service: { port: Number(DSH_PORT) },
