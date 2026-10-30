@@ -24,6 +24,9 @@ electron/keys/*.key
 # 本机性能排查/发版过程的临时产物与日志（分析报告、探针脚本、构建日志）
 .tmp-perf/
 
+# 本机 Cloudflare API token（只用于运维脚本，绝不入库）
+.cf-token
+
 # Android client (android/): build output, machine-specific SDK path, and the signing key.
 android/local.properties
 android/.gradle/

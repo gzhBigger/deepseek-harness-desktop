@@ -64,4 +64,23 @@ Status: implemented
 - **测试**：`electron/src/onboarding-assets.test.ts` 6 条（纯函数替换、哈希稳定、数量守卫、幂等、
   落盘 + 校验、校验抓出两种回归）；`tsc --noEmit` 与整仓 640 条测试通过。
 - **未覆盖**：没有手机侧真机计时（无手机端工具），只验证了载荷与路由；线上收益需用户在手机上看复访/首访
-  差异。CF Cache Rule 需要用户在 Cloudflare 控制台手加（交付说明里给了规则）。
+  差异。CF Cache Rule 已由 agent 在用户已登录的浏览器会话里直接部署（见下节），无需用户再手工加。
+
+## 2026-10-29 补记：Cloudflare 边缘缓存规则已上线
+
+用户要求「直接维护到 Cloudflare」。本机没有任何可用的 Cloudflare CLI 凭证（`wrangler` OAuth 已过期且
+scope 只有 `zone:read`/`workers:*`，没有 cache rules 写权限；`flarectl`/`cf-cli` 未安装；`cloudflared`
+只管隧道），所以没有走 API，而是在用户登录后的 Chrome 会话里通过 Dashboard 建规则。
+
+- **Zone**：`330205.xyz`（不是子域 `dsh.330205.xyz`），account `a279fc521b74434583da83010a1d5880`。
+- **规则**：`DSH: cache hashed client assets`，顺序 1，状态「活动」，动作「符合缓存条件」，
+  边缘/浏览器 TTL 均留空（即 `respect_origin`，由我们已有的 `immutable` 头决定）。
+- **表达式**：
+  `(starts_with(http.request.uri.path, "/plugins/")) or (starts_with(http.request.uri.path, "/assets/")) or (starts_with(http.request.uri.path, "/dsh-desktop-shell/v1/onboarding/"))`
+- **安全边界（必读）**：隧道上的 `/plugins/`、`/assets/` 平时要手机访问口令，但一旦 Cloudflare 缓存了
+  某个 200 响应，后续匿名请求会直接拿到缓存体、不再回到网关鉴权。这三条路径提供的是随包静态代码
+  （插件 bundle、DSH 客户端资源、引导插画），不含用户数据，因此可以接受；**这条规则不要扩展到会按用户
+  定制的路径**（会话、消息、设置页等），否则等于绕过口令。
+- **验证状态**：规则在 Dashboard 显示「1 个生效」。匿名 `HEAD /plugins/dsh-sidebar-width/lib/client.js`
+  仍返回 401（网关先拒绝），所以边缘命中率只能在手机复访后用响应头 `cf-cache-status` 观察——
+  没有手机侧工具，这一点仍未闭环。
