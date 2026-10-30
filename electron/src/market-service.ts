@@ -20,6 +20,7 @@ import { packumentUrl, searchMarketPackages, type MarketSearchResult } from './m
 import { countByCategory, fetchCatalog, filterByCategory, searchCatalog, sortCatalog, type Catalog, type CatalogSort } from './market-catalog-source.ts'
 import { inspectGithubPlugin } from './market-github.ts'
 import type { MarketSearchRequest } from './market-ipc.ts'
+import { readPluginReadme, type ReadmeFailure, type ReadmeRequest, type ReadmeResult } from './market-readme.ts'
 import { appendMarketLog, marketLogPath, readMarketLog, type MarketLogEntry } from './market-log.ts'
 import { diagnoseConflicts, readConflictWorld, type ConflictFinding, type StoreFacts } from './market-conflict.ts'
 import {
@@ -159,12 +160,29 @@ export interface MarketServiceOptions {
   readonly appExecutable: string
   /** Injected for tests. */
   readonly fetchJsonImpl?: JsonFetcher
+  /** Injected for tests: README 与图片的抓取。 */
+  readonly readmeFetchImpl?: typeof fetch
   /** Injected for tests. */
   readonly runPnpmImpl?: MarketInstallOptions['runPnpm']
   /** Progress/log sink (the window's activity line). */
   readonly log?: (line: string) => void
   /** Directory for the action log (the shell's log directory); omit to keep no file log. */
   readonly logDir?: string
+}
+
+/**
+ * 已安装插件的**实际**版本：读 profile 里 `node_modules/<name>/package.json`。
+ *
+ * 不解析 `dependencies` 的 spec：那里可能是 `^1.2.0`、`github:owner/repo` 或本地路径，用户要知道的
+ * 是「我装的是哪个版本」，只有落盘的 manifest 说得准。读不到就当未知（新装未落盘、包被删了）。
+ */
+function installedVersion(profileDir: string, name: string): string | undefined {
+  try {
+    const manifest = JSON.parse(readFileSync(join(profileDir, 'node_modules', name, 'package.json'), 'utf8')) as { version?: unknown }
+    return typeof manifest.version === 'string' && manifest.version !== '' ? manifest.version : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -185,6 +203,8 @@ export class MarketService {
    * something published this morning, and a wrong answer is worse than a slow one.
    */
   #catalogCache: { readonly at: number; readonly catalog: Catalog } | undefined
+  /** README 预览缓存：同一次会话里反复打开同一个插件不该重复抓取。 */
+  #readmeCache = new Map<string, { readonly at: number; readonly value: ReadmeResult | ReadmeFailure }>()
 
   constructor(options: MarketServiceOptions) {
     this.#options = options
@@ -338,9 +358,30 @@ export class MarketService {
   }
 
   /** Plugin names the profile currently declares, in the window's list order. */
-  installed(): readonly { readonly name: string; readonly spec: string }[] {
+  installed(): readonly { readonly name: string; readonly spec: string; readonly version?: string }[] {
     const dependencies = readProfileManifest(this.#options.profileDir).dependencies ?? {}
-    return Object.entries(dependencies).map(([name, spec]) => ({ name, spec }))
+    return Object.entries(dependencies).map(([name, spec]) => {
+      const version = installedVersion(this.#options.profileDir, name)
+      // `exactOptionalPropertyTypes` 下不能把 undefined 写进可选字段。
+      return version === undefined ? { name, spec } : { name, spec, version }
+    })
+  }
+
+  /**
+   * 一个插件的 README：抓取、解析成节点树、图片内联，交给预览对话框渲染。
+   *
+   * 结果按 `名字@版本 + 来源` 缓存 10 分钟：同一插件反复打开、以及列表与已安装视图各点一次，
+   * 都不该重复打 GitHub/npm。
+   */
+  async readme(request: ReadmeRequest): Promise<ReadmeResult | ReadmeFailure> {
+    const key = `${request.name}@${request.version ?? ''}|${request.url ?? ''}|${request.spec ?? ''}`
+    const cached = this.#readmeCache.get(key)
+    if (cached !== undefined && Date.now() - cached.at < 10 * 60 * 1000) return cached.value
+    const value = await readPluginReadme(request, {
+      ...(this.#options.readmeFetchImpl === undefined ? {} : { fetchImpl: this.#options.readmeFetchImpl }),
+    })
+    this.#readmeCache.set(key, { at: Date.now(), value })
+    return value
   }
 
   async #act(action: MarketAction, name: string, version?: string, spec?: string): Promise<MarketActionResult> {

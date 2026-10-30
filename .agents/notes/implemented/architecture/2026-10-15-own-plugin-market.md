@@ -44,6 +44,8 @@ Status: implemented
 - 市场只收录声明了 `dsh` 字段的包，且把"要装的 spec"原样展示；供应链风险被限制在"来源明确 + 准入字段"两条上，而不是靠上游 catalog 的隐藏规则。
 - **只读到 dsh 插件（`bundle.patch`）这一半**：插件若还要求运行时预装、或依赖上游 catalog 的归一化（如 `billion-context`），本市场目前装不到 —— 这是已知边界，不是 bug。
 - 上游若修好 spawn 缺陷，本市场依然有效（更薄、更贴近壳）；届时应以"壳内市场"为唯一入口，避免两套 UI 造成困惑。
+- 列表现在同时给出「已装 vX / 最新 vY」，并可从卡片直接预览 README（图片内联）；新增的 IPC 面、网络边界与节点树渲染见
+  [市场 README 预览与版本显示](../feature/2026-10-30-market-readme-preview-and-versions.md)。
 
 ## Evidence
 

@@ -154,6 +154,23 @@ export class MarketWindow {
     ipcMain.handle(MARKET_IPC.installed, (event) =>
       guard(event, () => ({ items: service.installed() })))
 
+    // README 预览：抓取与渲染都在主进程，窗口拿到的只有白名单节点的数据（见 market-readme.ts）。
+    ipcMain.handle(MARKET_IPC.readme, (event, raw: unknown) => guard(event, async () => {
+      const request = (raw !== null && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+      const name = typeof request.name === 'string' ? request.name.trim() : ''
+      if (name === '') return { ok: false as const, reason: '缺少插件名' }
+      const result = await service.readme({
+        name,
+        ...(typeof request.url === 'string' && request.url !== '' ? { url: request.url } : {}),
+        ...(typeof request.spec === 'string' && request.spec !== '' ? { spec: request.spec } : {}),
+        ...(typeof request.version === 'string' && request.version !== '' ? { version: request.version } : {}),
+      })
+      this.#options.log(result.ok
+        ? `market readme ${name} ok（${String(result.images)} 张图片，${result.source}）`
+        : `market readme ${name} failed：${result.reason}`)
+      return result
+    }))
+
     ipcMain.handle(MARKET_IPC.act, (event, action: unknown, name: unknown, version: unknown): Promise<MarketActionResultResponse> | MarketActionResultResponse =>
       guard(event, async () => {
         if (action !== 'install' && action !== 'update' && action !== 'uninstall') {

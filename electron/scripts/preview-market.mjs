@@ -97,6 +97,14 @@ const fixture = JSON.stringify({ entries, categoryList, categoryCounts, total: e
 const stub = `  <script>
     // Preview harness only (scripts/preview-market.mjs): a stub bridge with fixture data, so the real
     // page can be rendered and reviewed in a browser. Nothing here exists in the app.
+    window.addEventListener('error', event => {
+      const line = document.getElementById('activity')
+      if (line !== null) line.textContent = 'JS 错误：' + String(event.message)
+    })
+    window.addEventListener('unhandledrejection', event => {
+      const line = document.getElementById('activity')
+      if (line !== null) line.textContent = 'JS 拒绝：' + String(event.reason && event.reason.message ? event.reason.message : event.reason)
+    })
     const FIXTURE = JSON.parse(${JSON.stringify(fixture)})
     const sorted = (list, sort) => {
       const copy = [...list]
@@ -128,9 +136,39 @@ const stub = `  <script>
         }
       },
       installed: async () => ({ items: [
-        { name: 'dsh-plugin-kit', spec: 'link:D:/workspace/research/deepseek-harness-plugins/dsh-plugin-kit' },
-        { name: '@changfenhuang/dsh-genui', spec: 'github:omdsh-dev/dsh-genui' },
+        { name: 'dsh-plugin-kit', spec: 'link:D:/workspace/research/deepseek-harness-plugins/dsh-plugin-kit', version: '0.4.2' },
+        { name: '@changfenhuang/dsh-genui', spec: 'github:omdsh-dev/dsh-genui', version: '0.9.1' },
       ] }),
+      // README 预览的示例：节点树形状与主进程一致，对话框、图片与排版都能直接看到。
+      readme: async request => ({
+        ok: true,
+        source: 'github',
+        url: 'https://raw.githubusercontent.com/example/' + String(request && request.name ? request.name : 'plugin') + '/HEAD/README.md',
+        images: 1,
+        bytes: 2048,
+        truncated: false,
+        nodes: [
+          { tag: 'h1', children: [{ text: 'Example Plugin' }] },
+          { tag: 'p', children: [
+            { text: '一个示例插件：' },
+            { tag: 'strong', children: [{ text: '安装即用' }] },
+            { text: '，配置见 ' },
+            { tag: 'code', children: [{ text: 'dsh.config.yml' }] },
+            { text: '。' },
+          ] },
+          { tag: 'img', src: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', alt: '截图示例' },
+          { tag: 'ul', children: [
+            { tag: 'li', children: [{ text: '支持 README 预览' }] },
+            { tag: 'li', children: [{ text: '版本号来自已安装的 package.json' }] },
+          ] },
+          { tag: 'pre', children: [{ tag: 'code', language: 'bash', children: [{ text: 'dsh plugin add example-plugin' }] }] },
+          { tag: 'table', children: [
+            { tag: 'thead', children: [{ tag: 'tr', children: [{ tag: 'th', children: [{ text: '字段' }] }, { tag: 'th', children: [{ text: '含义' }] }] }] },
+            { tag: 'tbody', children: [{ tag: 'tr', children: [{ tag: 'td', children: [{ text: 'enabled' }] }, { tag: 'td', children: [{ text: '是否启用' }] }] }] },
+          ] },
+          { tag: 'p', children: [{ text: '更多见 ' }, { tag: 'a', href: 'https://example.com/docs', children: [{ text: '文档' }] }, { text: '。' }] },
+        ],
+      }),
       profileDir: async () => 'C:\\\\Users\\\\gzh33\\\\.dsh\\\\profiles\\\\dsh-desktop',
       search: async () => ({ ok: true, packages: [], skipped: [], page: { from: 0, size: 20, hasMore: false, scanned: 0 } }),
       act: async (action, name) => ({ ok: true, action, name, spec: name, code: 0, output: '', bundleRegistered: true }),

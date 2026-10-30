@@ -182,7 +182,9 @@ function isMarketDocument(): boolean {
 if (isMarketDocument()) {
   contextBridge.exposeInMainWorld('__DSH_MARKET__', Object.freeze({
     search: (request: unknown) => ipcRenderer.invoke(MARKET_IPC.search, request) as Promise<unknown>,
-    installed: () => ipcRenderer.invoke(MARKET_IPC.installed) as Promise<{ items: { name: string; spec: string }[] }>,
+    installed: () => ipcRenderer.invoke(MARKET_IPC.installed) as Promise<{ items: { name: string; spec: string; version?: string }[] }>,
+    /** README 预览：主进程抓取、解析成节点树（页面自己不能联网，也不解析 HTML）。 */
+    readme: (request: unknown) => ipcRenderer.invoke(MARKET_IPC.readme, request) as Promise<unknown>,
     act: (action: string, name: string, version?: string) =>
       ipcRenderer.invoke(MARKET_IPC.act, action, name, version ?? '') as Promise<unknown>,
     profileDir: () => ipcRenderer.invoke(MARKET_IPC.profileDir) as Promise<string>,

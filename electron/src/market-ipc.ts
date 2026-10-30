@@ -25,6 +25,8 @@ export const MARKET_IPC = {
   diagnose: 'market:diagnose',
   /** Browse the community catalog (category, sort, local search). */
   browse: 'market:browse',
+  /** Read one plugin's README for the preview dialog (fetched and parsed in the main process). */
+  readme: 'market:readme',
   /** Read a GitHub repository's manifest without installing anything (the window warns first). */
   githubInspect: 'market:github-inspect',
   /** Install a plugin straight from a GitHub repository or a release tarball. */

@@ -204,6 +204,38 @@
     footer .grow { flex: 1; }
     #activity { color: var(--faint); font-size: var(--t-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50%; }
 
+    /* README 预览：单列、可滚、图片不出框。内容由主进程解析成白名单节点，这里只负责排版。 */
+    #readme-dialog {
+      width: min(760px, 92vw); max-height: 82vh; padding: 0; border: 1px solid var(--line);
+      border-radius: 12px; background: var(--surface); color: var(--fg); overflow: hidden;
+    }
+    #readme-dialog::backdrop { background: rgba(0, 0, 0, .55); }
+    .readme-bar {
+      display: flex; align-items: center; gap: var(--s3); padding: var(--s3) var(--s4);
+      border-bottom: 1px solid var(--line-soft); position: sticky; top: 0; background: var(--surface); z-index: 1;
+    }
+    .readme-bar strong { font-size: var(--t-md); direction: ltr; }
+    .readme-bar .grow { flex: 1; }
+    .readme-body {
+      padding: var(--s4); overflow: auto; max-height: calc(82vh - 54px);
+      font-size: var(--t-sm); line-height: 1.65; word-break: break-word;
+    }
+    .readme-body h1, .readme-body h2, .readme-body h3, .readme-body h4 { margin: 1.1em 0 .5em; line-height: 1.3; }
+    .readme-body h1 { font-size: 1.5em; } .readme-body h2 { font-size: 1.28em; } .readme-body h3 { font-size: 1.1em; }
+    .readme-body p, .readme-body ul, .readme-body ol, .readme-body blockquote, .readme-body table { margin: .6em 0; }
+    .readme-body ul, .readme-body ol { padding-left: 1.4em; }
+    .readme-body li { margin: .25em 0; }
+    .readme-body img { max-width: 100%; height: auto; border-radius: 6px; display: block; margin: .6em 0; }
+    .readme-body code { background: var(--surface-2); border-radius: 4px; padding: .1em .35em; font-family: var(--mono, monospace); font-size: .92em; direction: ltr; }
+    .readme-body pre { background: var(--surface-2); border-radius: 8px; padding: var(--s3); overflow: auto; }
+    .readme-body pre code { background: none; padding: 0; }
+    .readme-body blockquote { border-left: 3px solid var(--line); padding-left: var(--s3); color: var(--muted); }
+    .readme-body table { border-collapse: collapse; display: block; overflow: auto; }
+    .readme-body th, .readme-body td { border: 1px solid var(--line); padding: .3em .6em; }
+    .readme-body a { color: var(--accent, #6aa9ff); }
+    .readme-failure { color: var(--muted); }
+    .md-image-missing { color: var(--faint); font-size: var(--t-xs); }
+
     @media (prefers-reduced-motion: reduce) {
       * { transition-duration: 1ms !important; animation-duration: 1ms !important; }
     }
@@ -306,6 +338,16 @@
       </div>
     </details>
   </section>
+
+  <dialog id="readme-dialog">
+    <div class="readme-bar">
+      <strong id="readme-name">README</strong>
+      <span id="readme-meta" class="card-meta"></span>
+      <span class="grow"></span>
+      <button id="readme-close" class="ghost">关闭</button>
+    </div>
+    <div id="readme-body" class="readme-body"></div>
+  </dialog>
 
   <footer>
     <span id="count"></span>
@@ -414,7 +456,11 @@
         const badges = [{ text: here ? '已安装' : '未安装', tone: here ? 'ok' : undefined }]
         if (item.client) badges.push({ text: '含界面' })
         const card = cardShell(item.name, badges)
-        metaLine(card, [item.version, ...(item.keywords || [])].filter(Boolean))
+        // 当前版本与可安装版本分开写：用户关心的是「我装的是哪个」和「这里能装到哪个」。
+        const versions = here
+          ? ['已装 ' + (here.version ? 'v' + here.version : '(版本未知)'), '最新 v' + item.version]
+          : ['最新 v' + item.version]
+        metaLine(card, [...versions, ...(item.keywords || [])].filter(Boolean))
         if (item.description) {
           const description = document.createElement('p')
           description.className = 'card-desc'
@@ -429,6 +475,11 @@
         installButton.className = 'primary'
         installButton.addEventListener('click', () => act('install', item.name, item.version))
         actions.append(installButton)
+        const readmeButton = document.createElement('button')
+        readmeButton.textContent = 'README'
+        readmeButton.title = '在线预览这个插件的 README（图片会一并加载）'
+        readmeButton.addEventListener('click', () => void openReadme({ name: item.name, version: item.version, url: item.url, spec: item.spec }))
+        actions.append(readmeButton)
         if (here && here.spec !== item.spec) {
           const updateButton = document.createElement('button')
           updateButton.textContent = `更新到 ${item.version}`
@@ -449,7 +500,7 @@
 
     async function refreshInstalled() {
       const result = await api.installed()
-      installed = new Map((result.items || []).map(entry => [entry.name, { spec: entry.spec }]))
+      installed = new Map((result.items || []).map(entry => [entry.name, { spec: entry.spec, version: entry.version }]))
     }
 
     // Paging state: the window owns what the user asked for; the shell only answers the request.
@@ -561,17 +612,22 @@
       }
 
       for (const entry of catalog.entries) {
-        const here = (catalog.installed || []).indexOf(entry.npm || '') >= 0
+        const npmName = entry.npm || ''
+        const installedEntry = npmName === '' ? undefined : installed.get(npmName)
+        const here = installedEntry !== undefined || (catalog.installed || []).indexOf(npmName) >= 0
         const badges = []
         if (entry.category) badges.push({ text: categoryLabel(entry.category) })
         if (here) badges.push({ text: '已安装', tone: 'ok' })
         const card = cardShell(entry.name, badges)
+        // 已装版本来自 profile 里真实的 package.json；目录里的 version 是「这里能装到哪个」。
         metaLine(card, [
+          ...(here ? ['已装 ' + (installedEntry && installedEntry.version ? 'v' + installedEntry.version : '(版本未知)')] : []),
+          ...(entry.version ? ['最新 v' + String(entry.version)] : []),
           '★ ' + String(entry.stars || 0),
           '下载 ' + String(entry.downloads || 0),
           ...(entry.owner ? [entry.owner] : []),
           ...(entry.npm ? [] : ['仅 GitHub']),
-        ])
+        ].filter(Boolean))
         const text = (entry.description && (entry.description.zh || entry.description.en)) || ''
         if (text) {
           const described = document.createElement('p')
@@ -616,6 +672,16 @@
           actions.append(fromGithub)
         }
         card.append(actions)
+        const readme = document.createElement('button')
+        readme.textContent = 'README'
+        readme.title = '在线预览这个插件的 README（图片会一并加载）'
+        readme.addEventListener('click', () => void openReadme({
+          name: npmName || entry.name,
+          ...(entry.version ? { version: String(entry.version) } : {}),
+          ...(entry.url ? { url: entry.url } : {}),
+          ...(entry.install ? { spec: entry.install } : {}),
+        }))
+        actions.append(readme)
         list.append(card)
       }
     }
@@ -828,6 +894,10 @@
         remove.textContent = '卸载'
         remove.addEventListener('click', () => void act('uninstall', entry.name))
         actions.append(remove)
+        const readme = document.createElement('button')
+        readme.textContent = 'README'
+        readme.addEventListener('click', () => void openReadme({ name: entry.name, version: entry.current }))
+        actions.append(readme)
         card.append(actions)
         host.append(card)
       }
@@ -898,6 +968,82 @@
       await refreshDiagnosis().catch(() => {})
       note('已安装 ' + String(updateStatuses.length) + ' 个插件')
     }
+
+    // ── README 预览 ─────────────────────────────────────────────────────
+    // 主进程把 README 解析成白名单节点（不是 HTML 字符串），这里只做一件事：按 tag 建元素、
+    // 文本走 createTextNode。页面因此永远不把字符串当标记塞进 DOM，也不解释 README 里的任何标记。
+    const README_TAGS = new Set([
+      'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code',
+      'strong', 'em', 'del', 'hr', 'br', 'a', 'img', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
+      'span', 'div',
+    ])
+
+    function buildReadmeNodes(parent, nodes) {
+      if (!Array.isArray(nodes)) return
+      for (const node of nodes) {
+        if (node === null || typeof node !== 'object') continue
+        if (typeof node.text === 'string') { parent.append(document.createTextNode(node.text)); continue }
+        if (typeof node.tag !== 'string' || !README_TAGS.has(node.tag)) continue
+        if (node.tag === 'img') {
+          if (typeof node.src !== 'string' || !node.src.startsWith('data:image/')) continue
+          const image = document.createElement('img')
+          image.src = node.src
+          image.alt = typeof node.alt === 'string' ? node.alt : ''
+          image.loading = 'lazy'
+          parent.append(image)
+          continue
+        }
+        const element = document.createElement(node.tag)
+        if (node.tag === 'a' && typeof node.href === 'string' && /^(https?:\/\/|#)/u.test(node.href)) {
+          element.href = node.href
+          element.target = '_blank'
+          element.rel = 'noreferrer noopener'
+        }
+        if (typeof node.language === 'string' && /^[\w.+#-]+$/u.test(node.language)) {
+          element.className = 'language-' + node.language
+        }
+        if (typeof node.className === 'string' && /^[a-z0-9 _-]+$/iu.test(node.className)) {
+          element.className = node.className
+        }
+        if (Array.isArray(node.children)) buildReadmeNodes(element, node.children)
+        parent.append(element)
+      }
+    }
+
+    /** 打开 README 对话框；加载态先出现，失败也在这个框里说清楚。 */
+    async function openReadme(request) {
+      const dialog = el('readme-dialog')
+      note('正在读取 ' + request.name + ' 的 README…')
+      el('readme-name').textContent = request.name
+      el('readme-meta').textContent = '正在加载 README…'
+      el('readme-body').replaceChildren()
+      if (!dialog.open) dialog.showModal()
+      let result
+      try {
+        result = await api.readme(request)
+      } catch (error) {
+        result = { ok: false, reason: error instanceof Error ? error.message : String(error) }
+      }
+      if (result === null || typeof result !== 'object' || result.ok !== true) {
+        el('readme-meta').textContent = ''
+        const failure = document.createElement('p')
+        failure.className = 'readme-failure'
+        failure.textContent = (result && typeof result.reason === 'string' && result.reason) || 'README 加载失败'
+        el('readme-body').append(failure)
+        return
+      }
+      const from = result.source === 'github' ? '来自 GitHub' : '来自 npm'
+      const images = typeof result.images === 'number' ? result.images : 0
+      el('readme-meta').textContent = from + ' · ' + String(images) + ' 张图片' + (result.truncated ? ' · 已截断' : '')
+      buildReadmeNodes(el('readme-body'), result.nodes)
+      report('readme ' + request.name + ' ok')
+    }
+
+    el('readme-close').addEventListener('click', () => el('readme-dialog').close())
+    el('readme-dialog').addEventListener('click', event => {
+      // 点遮罩关闭：事件目标是 dialog 本身（内容区有自己的元素）。
+      if (event.target === el('readme-dialog')) el('readme-dialog').close()
+    })
 
     el('tab-market').addEventListener('click', () => switchView('market'))
     el('tab-installed').addEventListener('click', () => switchView('installed'))
