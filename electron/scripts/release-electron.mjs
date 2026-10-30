@@ -343,6 +343,9 @@ const manifestPath = join(outputDir, 'latest.json')
 writeFileSync(manifestPath, `${JSON.stringify(manifestJson, null, 2)}\n`, 'utf8')
 process.stdout.write(`==> latest.json 已生成：${manifestPath}\n`)
 
+process.stdout.write('==> 检查 HEAD 是否已推送\n')
+assertHeadIsPushed()
+
 if (dryRun) {
   process.stdout.write('\n发布计划（--dry-run，未上传）：\n')
   // Mirror the real invocation: one release, four assets.
@@ -376,6 +379,29 @@ function resolveGh() {
     if (existsSync(candidate)) return candidate
   }
   return 'gh'
+}
+
+/**
+ * `gh release create v<version>` 不给 `--target` 时，tag 指向**远端**默认分支的 HEAD。
+ * 本地提交没推上去就会把 tag（连同 GitHub 生成的源码包）打到旧代码上——2026-10-30 的 0.4.20
+ * 正是这样把 tag 打到了 v0.4.19 的提交上，事后才手工 `git push --force` 修正。
+ * 所以在发布前把这件事变成硬失败，而不是留给发布后检查。
+ */
+function assertHeadIsPushed() {
+  const git = (args) => execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim()
+  let upstream
+  try {
+    git(['fetch', 'origin', '--quiet'])
+    upstream = git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'])
+  } catch {
+    process.stdout.write('==> 跳过「是否已推送」检查（没有 upstream 或取不到远端）\n')
+    return
+  }
+  const ahead = Number.parseInt(git(['rev-list', '--count', `${upstream}..HEAD`]), 10)
+  if (Number.isFinite(ahead) && ahead > 0) {
+    fail(`HEAD 上有 ${String(ahead)} 个未推送的提交（${upstream} 之后）。gh 会拿远端分支的 HEAD 打 tag，`
+      + '这样发布会把 tag 和源码包指到旧代码上。先 git push，再重新发版。')
+  }
 }
 
 process.stdout.write('==> gh release create\n')
