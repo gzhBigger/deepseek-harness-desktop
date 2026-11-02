@@ -48,6 +48,12 @@ export interface ReadmeElement {
   readonly alt?: string
   readonly language?: string
   readonly className?: string
+  readonly align?: 'left' | 'center' | 'right'
+  readonly width?: string
+  readonly height?: string
+  readonly colspan?: string
+  readonly rowspan?: string
+  readonly open?: boolean
 }
 
 export type ReadmeNode = ReadmeText | ReadmeElement
@@ -282,17 +288,224 @@ function parseInline(text: string, base: string | undefined): InlinePiece[] {
   return emphasised
 }
 
-/** 行内片段 → 节点。图片先保留远程地址，内联阶段再替换成 data URL。 */
-function inlineNodes(text: string, base: string | undefined): ReadmeNode[] {
-  return parseInline(text, base).map((piece): ReadmeNode => {
-    switch (piece.kind) {
-      case 'text': return textNode(piece.text)
-      case 'code': return { tag: 'code', children: [textNode(piece.text)] }
-      case 'emphasis': return { tag: piece.tag, children: [textNode(piece.text)] }
-      case 'link': return { tag: 'a', href: piece.href, children: [textNode(piece.text)] }
-      case 'image': return { tag: 'img', src: piece.src, alt: piece.alt }
+/** 常量的 HTML 实体；不追求完整实体表，README 里出现的就是这几种。 */
+function decodeEntities(text: string): string {
+  return text.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/gu, (whole, body: string) => {
+    if (body.startsWith('#x') || body.startsWith('#X')) {
+      const code = Number.parseInt(body.slice(2), 16)
+      return Number.isFinite(code) && code > 0 && code <= 0x10_ffff ? String.fromCodePoint(code) : whole
+    }
+    if (body.startsWith('#')) {
+      const code = Number.parseInt(body.slice(1), 10)
+      return Number.isFinite(code) && code > 0 && code <= 0x10_ffff ? String.fromCodePoint(code) : whole
+    }
+    switch (body.toLowerCase()) {
+      case 'amp': return '&'
+      case 'lt': return '<'
+      case 'gt': return '>'
+      case 'quot': return '"'
+      case 'apos': return "'"
+      case 'nbsp': return '\u00a0'
+      case 'mdash': return '—'
+      case 'ndash': return '–'
+      case 'hellip': return '…'
+      case 'middot': return '·'
+      default: return whole
     }
   })
+}
+
+/** 自闭合标签。 */
+const HTML_VOID = new Set(['br', 'hr', 'img', 'wbr', 'source'])
+/** 整段丢弃（连内容一起）的标签：它们要么是脚本，要么在 README 里只会变成一片空白。 */
+const HTML_DROP = new Set([
+  'script', 'style', 'iframe', 'object', 'embed', 'svg', 'math', 'template', 'noscript',
+  'link', 'meta', 'form', 'input', 'button', 'video', 'audio', 'canvas', 'map', 'area', 'base',
+])
+/** 老式/缩写标签 → 我们认识的等价物。 */
+const HTML_ALIAS: Readonly<Record<string, string>> = { b: 'strong', i: 'em', s: 'del', strike: 'del' }
+/** 允许出现在输出里的标签。 */
+const HTML_ALLOWED = new Set([
+  'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code',
+  'strong', 'em', 'del', 'hr', 'br', 'a', 'img', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
+  'span', 'details', 'summary', 'figure', 'figcaption', 'kbd', 'sub', 'sup', 'wbr',
+])
+
+/** 任何形状的标签：属性里允许出现 `>`（引号内），所以不能简单用 `[^>]*`。 */
+const HTML_TAG = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>/gu
+
+const normaliseTag = (name: string): string => {
+  const lower = name.toLowerCase()
+  return HTML_ALIAS[lower] ?? lower
+}
+
+/**
+ * 图片地址：只接受 https、README 自带的位图 data URL，以及能按 base 解析成 https 的相对路径。
+ * `data:image/svg+xml` 一律拒绝——svg 能带脚本语义，不值得为少数徽章赌一次。
+ */
+function resolveImageSrc(value: string, base: string | undefined): string | undefined {
+  const text = value.trim()
+  if (/^data:image\/(png|jpe?g|gif|webp|avif);base64,/iu.test(text)) return text
+  if (/^https:\/\//iu.test(text)) return text
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(text) || text.startsWith('//')) return undefined
+  const resolved = resolveLink(text, base)
+  return resolved !== undefined && /^https:\/\//iu.test(resolved) ? resolved : undefined
+}
+
+/** 只要这几个属性；其余（`class`、`style`、`on*`、`id`…）一律不进节点树。 */
+function htmlAttributes(raw: string, base: string | undefined): Partial<ReadmeElement> {
+  const extra: {
+    href?: string
+    src?: string
+    alt?: string
+    align?: 'left' | 'center' | 'right'
+    width?: string
+    height?: string
+    colspan?: string
+    rowspan?: string
+    open?: boolean
+  } = {}
+  for (const match of raw.matchAll(/([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/gu)) {
+    const name = (match[1] ?? '').toLowerCase()
+    // 属性值里混进来的实体先解开，`&amp;` 在 URL 里很常见。
+    const value = decodeEntities(match[2] ?? match[3] ?? match[4] ?? '')
+    if (name === 'href') {
+      const href = value.startsWith('#') || value.startsWith('mailto:') ? value : resolveLink(value, base)
+      if (href !== undefined && /^(https?:\/\/|mailto:|#)/iu.test(href)) extra.href = href
+    } else if (name === 'src') {
+      const src = resolveImageSrc(value, base)
+      if (src !== undefined) extra.src = src
+    } else if (name === 'alt') extra.alt = value.slice(0, 300)
+    else if (name === 'align' && /^(left|center|right)$/iu.test(value)) extra.align = value.toLowerCase() as 'left' | 'center' | 'right'
+    else if ((name === 'width' || name === 'height' || name === 'colspan' || name === 'rowspan')) {
+      const numeric = Number(value)
+      if (Number.isInteger(numeric) && numeric > 0 && numeric <= 2000) extra[name] = String(numeric)
+    } else if (name === 'open') extra.open = true
+  }
+  return extra
+}
+
+/**
+ * 把一小段 HTML 解析成同一套白名单节点。
+ *
+ * 为什么需要它：README 里 `<p align="center">` + `<img>`、`<details><summary>`、`<br>` 到处都是，
+ * 把它们当纯文本显示会让预览看起来"坏了"。这里不是浏览器：没有 DOM、没有 innerHTML，
+ * 只有「标签 → 节点」和「其余一律按文字」两条规则——未知标签原样保留成文字（所以 `<https://…>`
+ * 这种自动链接不会丢），`script`/`style` 这类整段丢弃。
+ */
+/** 这些标签内部的文本可以再走一遍 markdown：`<details>` 展开里放表格、列表是常见写法。 */
+const HTML_BLOCK_CONTAINER = new Set(['details', 'div', 'blockquote', 'li', 'td', 'th', 'figure'])
+
+const looksLikeMarkdown = (text: string): boolean =>
+  /(^|\n)\s*(\||#{1,6}\s|[-*+]\s|\d+\.\s|```|> )/u.test(text)
+
+export function htmlNodes(source: string, depth = 0, base?: string): ReadmeNode[] {
+  const root: ReadmeNode[] = []
+  const stack: { readonly tag: string; readonly element: ReadmeElement; readonly children: ReadmeNode[] }[] = []
+  const target = (): ReadmeNode[] => stack.at(-1)?.children ?? root
+  let cursor = 0
+
+  const append = (node: ReadmeNode): void => { target().push(node) }
+  const appendText = (text: string): void => {
+    if (text === '') return
+    const decoded = decodeEntities(text)
+    if (decoded.trim() === '') return
+    // `<details>`、`<div>` 里经常夹着 markdown（表格、列表）。块级容器里的段落交给渲染器再走一遍，
+    // 只做一层，避免异常输入互相递归。
+    const parent = stack.at(-1)?.tag
+    if (depth < 2 && parent !== undefined && HTML_BLOCK_CONTAINER.has(parent) && looksLikeMarkdown(decoded)) {
+      const nested = renderMarkdown(decoded.trim(), { htmlDepth: depth + 1, ...(base === undefined ? {} : { base }) })
+      for (const node of nested) append(node)
+      return
+    }
+    append(textNode(decoded))
+  }
+
+  while (cursor < source.length) {
+    HTML_TAG.lastIndex = cursor
+    const match = HTML_TAG.exec(source)
+    if (match === null) {
+      appendText(source.slice(cursor))
+      break
+    }
+    if (match.index > cursor) appendText(source.slice(cursor, match.index))
+    const rawTag = match[0]
+    const closing = match[1] === '/'
+    const name = normaliseTag(match[2] ?? '')
+    const attributes = match[3] ?? ''
+    const selfClosing = /\/\s*$/u.test(attributes)
+    const after = match.index + rawTag.length
+    cursor = after
+
+    if (HTML_DROP.has(name)) {
+      if (closing || selfClosing) continue
+      // 丢掉整段内容：按同名标签的深度跳过。
+      let depth = 1
+      while (cursor < source.length) {
+        HTML_TAG.lastIndex = cursor
+        const inner = HTML_TAG.exec(source)
+        if (inner === null) break
+        cursor = inner.index + inner[0].length
+        if (normaliseTag(inner[2] ?? '') !== name) continue
+        if (inner[1] === '/') depth -= 1
+        else if (!/\/\s*$/u.test(inner[3] ?? '')) depth += 1
+        if (depth <= 0) break
+      }
+      continue
+    }
+
+    if (!HTML_ALLOWED.has(name)) {
+      // 不认识的标签：原样当文字，避免把 `<T>`、`<https://…>` 吞掉。
+      appendText(rawTag)
+      continue
+    }
+
+    if (closing) {
+      const at = stack.map(entry => entry.tag).lastIndexOf(name)
+      if (at >= 0) stack.length = at
+      continue
+    }
+
+    if (HTML_VOID.has(name) || selfClosing) {
+      append({ tag: name, ...htmlAttributes(attributes, base) })
+      continue
+    }
+
+    const children: ReadmeNode[] = []
+    const element: ReadmeElement = { tag: name, ...htmlAttributes(attributes, base), children }
+    append(element)
+    stack.push({ tag: name, element, children })
+  }
+
+  return root
+}
+
+/** 行内文本里是否可能藏着 HTML 标签（要连标签名一起看，别把数学里的 `<x>` 当标签）。 */
+function containsHtml(text: string): boolean {
+  return /<\/?([a-zA-Z][a-zA-Z0-9]*)(?=[\s/>])/u.test(text)
+}
+
+/** 行内片段 → 节点。图片先保留远程地址，内联阶段再替换成 data URL。 */
+function inlineNodes(text: string, base: string | undefined): ReadmeNode[] {
+  const nodes: ReadmeNode[] = []
+  for (const piece of parseInline(text, base)) {
+    if (piece.kind === 'text' && containsHtml(piece.text)) {
+      const parsed = htmlNodes(piece.text, 0, base)
+      // 只有真的解析出元素才采用；否则（例如 `<T>`）保留原来的纯文本。
+      if (parsed.some(node => !('text' in node))) {
+        nodes.push(...parsed)
+        continue
+      }
+    }
+    switch (piece.kind) {
+      case 'text': nodes.push(textNode(decodeEntities(piece.text))); break
+      case 'code': nodes.push({ tag: 'code', children: [textNode(piece.text)] }); break
+      case 'emphasis': nodes.push({ tag: piece.tag, children: [textNode(piece.text)] }); break
+      case 'link': nodes.push({ tag: 'a', href: piece.href, children: [textNode(piece.text)] }); break
+      case 'image': nodes.push({ tag: 'img', src: piece.src, alt: piece.alt }); break
+    }
+  }
+  return nodes
 }
 
 /** 表格：`| a | b |` 加一行分隔线才成立。 */
@@ -307,7 +520,7 @@ const splitRow = (line: string): string[] =>
  * 渲染一个足够 README 用的 Markdown 子集：标题、段落、列表（含嵌套）、引用、代码块、表格、
  * 分割线，行内强调/代码/链接/图片。输出只有白名单标签，不存在 HTML 透传。
  */
-export function renderMarkdown(markdown: string, options: { readonly base?: string } = {}): readonly ReadmeNode[] {
+export function renderMarkdown(markdown: string, options: { readonly base?: string; readonly htmlDepth?: number } = {}): readonly ReadmeNode[] {
   const lines = markdown.replace(/\r\n?/gu, '\n').split('\n')
   const blocks: ReadmeNode[] = []
   let index = 0
@@ -316,6 +529,30 @@ export function renderMarkdown(markdown: string, options: { readonly base?: stri
   while (index < lines.length) {
     const line = lines[index] ?? ''
     if (line.trim() === '') { index += 1; continue }
+
+    // HTML 块：从 `<p align="center">`、`<div>`、`<details>` 这类行开始，按同名标签的深度吃到闭合。
+    const htmlStart = /^ {0,3}<([a-zA-Z][a-zA-Z0-9]*)(?=[\s/>])/u.exec(line)
+    if (htmlStart !== null) {
+      const name = normaliseTag(htmlStart[1] ?? '')
+      if (HTML_DROP.has(name) || HTML_ALLOWED.has(name)) {
+        const block: string[] = []
+        let depth = 0
+        let cursor = index
+        const single = HTML_VOID.has(name) || /\/>\s*$/u.test(line)
+        while (cursor < lines.length && cursor - index < 500) {
+          const current = lines[cursor] ?? ''
+          block.push(current)
+          depth += (current.match(new RegExp(`<${name}(?=[\\s/>])`, 'giu')) ?? []).length
+          depth -= (current.match(new RegExp(`</${name}\\s*>`, 'giu')) ?? []).length
+          cursor += 1
+          if (single || depth <= 0) break
+          // 未闭合的块遇到标题就收手，别把后面的 markdown 一起吞掉。
+          if (/^#{1,6}\s/u.test(current)) break
+        }
+        const nodes = htmlNodes(block.join('\n'), options.htmlDepth ?? 0, options.base)
+        if (HTML_DROP.has(name) || nodes.length > 0) { blocks.push(...nodes); index = cursor; continue }
+      }
+    }
 
     const fence = /^\s*(```+|~~~+)\s*([\w.+#-]*)\s*$/u.exec(line)
     if (fence !== null) {
@@ -512,11 +749,13 @@ export async function readPluginReadme(request: ReadmeRequest, deps: ReadmeDeps 
   let used = 0
   let inlined = 0
   for (const { node, path } of collectImages(nodes)) {
+    const source = node.src
+    // README 里自带的 data URL 不用再抓，也不能当成远程地址去 fetch。
+    if (source !== undefined && source.startsWith('data:image/')) continue
     if (inlined >= MAX_IMAGES || used >= MAX_TOTAL_IMAGE_BYTES) {
       nodes = replaceAt(nodes, path, { tag: 'span', className: 'md-image-missing', children: [textNode(`[图片：${node.alt === undefined || node.alt === '' ? '未内联' : node.alt}]`)] })
       continue
     }
-    const source = node.src
     const data = source === undefined ? undefined : await fetchImageDataUrl(source, deps)
     if (data === undefined || used + data.bytes > MAX_TOTAL_IMAGE_BYTES) {
       const label = node.alt === undefined || node.alt === '' ? (source ?? '图片') : node.alt

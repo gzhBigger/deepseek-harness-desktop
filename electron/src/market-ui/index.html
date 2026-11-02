@@ -243,11 +243,16 @@
     .readme-body p, .readme-body ul, .readme-body ol, .readme-body blockquote, .readme-body table { margin: .6em 0; }
     .readme-body ul, .readme-body ol { padding-left: 1.4em; }
     .readme-body li { margin: .25em 0; }
-    .readme-body img { max-width: 100%; height: auto; border-radius: 6px; display: block; margin: .6em 0; }
+    .readme-body img { max-width: 100%; height: auto; border-radius: 6px; display: inline-block; vertical-align: top; margin: .6em 0; }
     .readme-body code { background: var(--surface-2); border-radius: 4px; padding: .1em .35em; font-family: var(--mono, monospace); font-size: .92em; direction: ltr; }
     .readme-body pre { background: var(--surface-2); border-radius: 8px; padding: var(--s3); overflow: auto; }
     .readme-body pre code { background: none; padding: 0; }
     .readme-body blockquote { border-left: 3px solid var(--line); padding-left: var(--s3); color: var(--muted); }
+    .readme-body details { border: 1px solid var(--line-soft); border-radius: 8px; padding: var(--s2) var(--s3); margin: .6em 0; }
+    .readme-body summary { cursor: pointer; font-weight: 600; }
+    .readme-body figure { margin: .8em 0; }
+    .readme-body figcaption { color: var(--faint); font-size: var(--t-xs); }
+    .readme-body kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 .3em; font-size: .9em; }
     .readme-body table { border-collapse: collapse; display: block; overflow: auto; }
     .readme-body th, .readme-body td { border: 1px solid var(--line); padding: .3em .6em; }
     .readme-body a { color: var(--accent, #6aa9ff); }
@@ -1039,12 +1044,12 @@
     }
 
     // ── README 预览 ─────────────────────────────────────────────────────
-    // 主进程把 README 解析成白名单节点（不是 HTML 字符串），这里只做一件事：按 tag 建元素、
-    // 文本走 createTextNode。页面因此永远不把字符串当标记塞进 DOM，也不解释 README 里的任何标记。
+    // 主进程把 README（Markdown 与内嵌 HTML）都解析成白名单节点，这里只做一件事：按 tag 建元素、
+    // 文本走 createTextNode。页面因此永远不把字符串当标记塞进 DOM。
     const README_TAGS = new Set([
       'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code',
-      'strong', 'em', 'del', 'hr', 'br', 'a', 'img', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
-      'span', 'div',
+      'strong', 'em', 'del', 'hr', 'br', 'a', 'img', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
+      'span', 'div', 'details', 'summary', 'figure', 'figcaption', 'kbd', 'sub', 'sup',
     ])
 
     function buildReadmeNodes(parent, nodes) {
@@ -1059,6 +1064,7 @@
           image.src = node.src
           image.alt = typeof node.alt === 'string' ? node.alt : ''
           image.loading = 'lazy'
+          applyBox(image, node)
           parent.append(image)
           continue
         }
@@ -1074,9 +1080,21 @@
         if (typeof node.className === 'string' && /^[a-z0-9 _-]+$/iu.test(node.className)) {
           element.className = node.className
         }
+        applyBox(element, node)
         if (Array.isArray(node.children)) buildReadmeNodes(element, node.children)
         parent.append(element)
       }
+    }
+
+    /** 主进程只交出已经过白名单的排版属性：对齐、宽高、表格跨列、`<details open>`。 */
+    function applyBox(element, node) {
+      if (node.align === 'left' || node.align === 'center' || node.align === 'right') {
+        element.style.textAlign = node.align
+      }
+      for (const name of ['width', 'height', 'colspan', 'rowspan']) {
+        if (typeof node[name] === 'string' && /^\d{1,4}$/u.test(node[name])) element.setAttribute(name, node[name])
+      }
+      if (node.tag === 'details' && node.open === true) element.open = true
     }
 
     /** 打开 README 对话框；加载态先出现，失败也在这个框里说清楚。 */

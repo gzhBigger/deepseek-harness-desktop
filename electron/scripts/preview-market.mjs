@@ -17,6 +17,38 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+// 预览用的 README 节点直接由**真实渲染器**生成（Node 24 直接跑 .ts），截图才能反映线上行为。
+import { renderMarkdown } from '../src/market-readme.ts'
+
+const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+const README_SAMPLE = `
+<p align="center">
+  <img src="${PNG}" alt="徽章" width="160">
+  <a href="https://example.com/docs">文档</a>
+</p>
+
+<h1 align="center">Example Plugin</h1>
+
+一个示例插件：**安装即用**，配置见 \`dsh.config.yml\`。
+
+<details open>
+<summary>点开看表格</summary>
+
+| 字段 | 含义 |
+| --- | --- |
+| enabled | 是否启用 |
+| size | 像素宽度 |
+
+</details>
+
+第一行<br>第二行，按键 <kbd>Ctrl</kbd>+<kbd>K</kbd> 打开。
+
+<figure>
+  <img src="${PNG}" alt="截图" width="320">
+  <figcaption>图 1：README 里的 HTML 也能排版</figcaption>
+</figure>
+`
+const README_NODES = renderMarkdown(README_SAMPLE)
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2)
@@ -148,27 +180,8 @@ const stub = `  <script>
         images: 1,
         bytes: 2048,
         truncated: false,
-        nodes: [
-          { tag: 'h1', children: [{ text: 'Example Plugin' }] },
-          { tag: 'p', children: [
-            { text: '一个示例插件：' },
-            { tag: 'strong', children: [{ text: '安装即用' }] },
-            { text: '，配置见 ' },
-            { tag: 'code', children: [{ text: 'dsh.config.yml' }] },
-            { text: '。' },
-          ] },
-          { tag: 'img', src: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', alt: '截图示例' },
-          { tag: 'ul', children: [
-            { tag: 'li', children: [{ text: '支持 README 预览' }] },
-            { tag: 'li', children: [{ text: '版本号来自已安装的 package.json' }] },
-          ] },
-          { tag: 'pre', children: [{ tag: 'code', language: 'bash', children: [{ text: 'dsh plugin add example-plugin' }] }] },
-          { tag: 'table', children: [
-            { tag: 'thead', children: [{ tag: 'tr', children: [{ tag: 'th', children: [{ text: '字段' }] }, { tag: 'th', children: [{ text: '含义' }] }] }] },
-            { tag: 'tbody', children: [{ tag: 'tr', children: [{ tag: 'td', children: [{ text: 'enabled' }] }, { tag: 'td', children: [{ text: '是否启用' }] }] }] },
-          ] },
-          { tag: 'p', children: [{ text: '更多见 ' }, { tag: 'a', href: 'https://example.com/docs', children: [{ text: '文档' }] }, { text: '。' }] },
-        ],
+        // 真实渲染器的输出：HTML 块（居中、徽章、details、figure）都在里面。
+        nodes: ${JSON.stringify(README_NODES)},
       }),
       profileDir: async () => 'C:\\\\Users\\\\gzh33\\\\.dsh\\\\profiles\\\\dsh-desktop',
       search: async () => ({ ok: true, packages: [], skipped: [], page: { from: 0, size: 20, hasMore: false, scanned: 0 } }),
@@ -212,6 +225,17 @@ const stub = `  <script>
       close: async () => true,
       onView: () => () => {},
     }
+
+    // 截图辅助：URL 带 #readme 时自动打开第一条 README，headless 截图才有对话框可看。
+    window.addEventListener('load', () => {
+      if (!window.location.hash.includes('readme')) return
+      const open = () => {
+        const button = [...document.querySelectorAll('button')].find(node => /README/u.test(node.textContent || ''))
+        if (button) { button.click(); return true }
+        return false
+      }
+      if (!open()) setTimeout(open, 300)
+    })
   </script>
 `
 

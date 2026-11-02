@@ -58,12 +58,81 @@ test('markdown：标题、列表、代码块与表格都变成结构节点，标
   assert.deepEqual(collect(nodes, 'td').map(item => item.text), ['1', '2'])
 })
 
-test('markdown：原始 HTML 只会变成文字，不会变成节点', () => {
-  const nodes = renderMarkdown('<script>alert(1)</script>\n\n<img src=x onerror=alert(1)>')
+test('HTML：居中的徽章块变成节点，属性只留白名单里的那几个', () => {
+  const nodes = renderMarkdown([
+    '<p align="center">',
+    '  <img src="https://img.shields.io/badge/build-passing-green" alt="build" width="120">',
+    '  <a href="https://example.com/docs">文档</a>',
+    '</p>',
+  ].join('\n'))
+  const paragraph = collect(nodes, 'p')[0]
+  assert.equal(paragraph?.node.align, 'center')
+  const image = collect(nodes, 'img')[0]
+  assert.equal(image?.node.src, 'https://img.shields.io/badge/build-passing-green')
+  assert.equal(image?.node.width, '120')
+  assert.equal(collect(nodes, 'a')[0]?.node.href, 'https://example.com/docs')
+})
+
+test('HTML：危险标签整段丢弃，未知标签原样保留成文字', () => {
+  const nodes = renderMarkdown('<script>alert(1)</script>\n\n<T> 与 <https://example.com> 都要留下')
   assert.equal(collect(nodes, 'script').length, 0)
-  assert.equal(collect(nodes, 'img').length, 0)
-  assert.match(allText(nodes), /<script>alert\(1\)<\/script>/u)
-  assert.match(allText(nodes), /<img src=x onerror=alert\(1\)>/u)
+  assert.doesNotMatch(allText(nodes), /alert\(1\)/u, 'script 的内容不能漏出来')
+  assert.match(allText(nodes), /<T>/u)
+  assert.match(allText(nodes), /<https:\/\/example\.com>/u)
+})
+
+test('HTML：事件处理器与 style/class 属性不会进入节点树', () => {
+  const nodes = renderMarkdown('<div onclick="steal()" style="color:red" class="x">hi</div>')
+  const div = collect(nodes, 'div')[0]
+  assert.equal(div?.text, 'hi')
+  const keys = Object.keys(div?.node ?? {})
+  assert.deepEqual(keys.filter(key => !['tag', 'children'].includes(key)), [])
+})
+
+test('HTML：<details> 展开里的 markdown 表格照常渲染', () => {
+  const nodes = renderMarkdown([
+    '<details>',
+    '<summary>展开看表格</summary>',
+    '',
+    '| 字段 | 含义 |',
+    '| --- | --- |',
+    '| enabled | 是否启用 |',
+    '',
+    '</details>',
+  ].join('\n'))
+  assert.equal(collect(nodes, 'details').length, 1)
+  assert.equal(collect(nodes, 'summary')[0]?.text, '展开看表格')
+  assert.deepEqual(collect(nodes, 'th').map(item => item.text), ['字段', '含义'])
+  assert.deepEqual(collect(nodes, 'td').map(item => item.text), ['enabled', '是否启用'])
+})
+
+test('HTML：details/summary、br、实体与行内 <b>', () => {
+  const nodes = renderMarkdown([
+    '<details open>',
+    '<summary>点开看</summary>',
+    '',
+    '正文 &amp; 说明',
+    '</details>',
+    '第一行<br>第二行 <b>加粗</b>',
+  ].join('\n'))
+  const details = collect(nodes, 'details')[0]
+  assert.equal(details?.node.open, true)
+  assert.equal(collect(nodes, 'summary')[0]?.text, '点开看')
+  assert.equal(collect(nodes, 'br').length, 1)
+  assert.equal(collect(nodes, 'strong')[0]?.text, '加粗')
+  assert.match(allText(nodes), /正文 & 说明/u)
+})
+
+test('HTML：相对图片/链接按 base 解析，没有 base 或非 http(s) 就丢掉', () => {
+  const nodes = renderMarkdown('<p><img src="./docs/a.png" alt="a"> <a href="docs/b.md">b</a> <a href="javascript:alert(1)">坏</a></p>', {
+    base: 'https://raw.githubusercontent.com/o/r/HEAD/',
+  })
+  assert.equal(collect(nodes, 'img')[0]?.node.src, 'https://raw.githubusercontent.com/o/r/HEAD/docs/a.png')
+  const links = collect(nodes, 'a')
+  assert.equal(links[0]?.node.href, 'https://raw.githubusercontent.com/o/r/HEAD/docs/b.md')
+  assert.equal(links[1]?.node.href, undefined, 'javascript: 链接不能带上 href')
+  assert.match(links[1]?.text ?? '', /坏/u)
+  assert.equal(collect(renderMarkdown('<img src="./a.png">'), 'img')[0]?.node.src, undefined)
 })
 
 test('markdown：相对链接按 base 解析，非 http(s) 链接只留文字', () => {
