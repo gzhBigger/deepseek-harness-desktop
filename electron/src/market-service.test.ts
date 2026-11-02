@@ -78,11 +78,18 @@ test('a runtime without pnpm reports an actionable failure instead of throwing',
 test('安装过程把 pnpm 的进度翻译成人话推给窗口，并以 done 收尾', async () => {
   const profileDir = mkdtempSync(join(tmpdir(), 'market-progress-'))
   writeFileSync(join(profileDir, 'package.json'), JSON.stringify({ name: 'probe-profile', private: true }))
+  // 自造一个「看起来可用」的运行时：`#act` 在起进程前要求 pnpm.cjs 存在，而这条测试注入的是假
+  // runner，所以文件只需要存在。用仓库里的真实运行时会让测试在没跑过 prepare-runtime 的 CI 上失败
+  // （2026-11-02 的 CI 正是这样红的）。
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'market-runtime-'))
+  mkdirSync(join(runtimeRoot, 'node_modules', 'pnpm', 'bin'), { recursive: true })
+  writeFileSync(join(runtimeRoot, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'), '')
+  mkdirSync(join(runtimeRoot, 'bin'), { recursive: true })
+  writeFileSync(join(runtimeRoot, 'bin', 'node.exe'), '')
   const events: { readonly phase: string; readonly detail: string; readonly elapsedMs: number }[] = []
   const service = new MarketService({
     profileDir,
-    // The prepared runtime in this checkout: `#act` refuses before spawning if pnpm is not found.
-    runtimeRoot: fileURLToPath(new URL('../runtime/dsh', import.meta.url)),
+    runtimeRoot,
     appExecutable: 'x',
     runPnpmImpl: async (_args, _environment, onLine) => {
       onLine?.('Progress: resolved 3, reused 1, downloaded 2, added 0')
