@@ -105,6 +105,7 @@ const stub = `  <script>
       const line = document.getElementById('activity')
       if (line !== null) line.textContent = 'JS 拒绝：' + String(event.reason && event.reason.message ? event.reason.message : event.reason)
     })
+    let previewProgress = null
     const FIXTURE = JSON.parse(${JSON.stringify(fixture)})
     const sorted = (list, sort) => {
       const copy = [...list]
@@ -171,7 +172,26 @@ const stub = `  <script>
       }),
       profileDir: async () => 'C:\\\\Users\\\\gzh33\\\\.dsh\\\\profiles\\\\dsh-desktop',
       search: async () => ({ ok: true, packages: [], skipped: [], page: { from: 0, size: 20, hasMore: false, scanned: 0 } }),
-      act: async (action, name) => ({ ok: true, action, name, spec: name, code: 0, output: '', bundleRegistered: true }),
+      // 进度条需要一个"会慢慢跑"的 act 才能看出来：真机上 pnpm 的每一行由主进程翻译后推来，
+      // 预览里就用同样的形状定时喂几帧，截图才有东西可看。
+      onProgress: listener => {
+        previewProgress = listener
+        return () => { previewProgress = null }
+      },
+      act: async (action, name) => {
+        const ticks = [
+          { phase: 'starting', detail: '正在准备 pnpm' },
+          { phase: 'resolve', detail: '共 12 个包' },
+          { phase: 'download', detail: '已解析 12 · 复用 9 · 下载 3 · 已链接 0' },
+          { phase: 'link', detail: '已解析 12 · 复用 9 · 下载 3 · 已链接 3' },
+          { phase: 'done', detail: '完成，用时 1.2 秒' },
+        ]
+        for (const [index, tick] of ticks.entries()) {
+          if (previewProgress !== null) previewProgress({ action, name, ...tick, elapsedMs: index * 400 })
+          await new Promise(resolve => setTimeout(resolve, 400))
+        }
+        return { ok: true, action, name, spec: name, code: 0, output: '', bundleRegistered: true }
+      },
       updates: async () => ([
         { name: 'dsh-cost-meter', current: '1.8.26', latest: '1.9.0', hasUpdate: true, source: 'registry' },
         { name: '@changfenhuang/dsh-genui', current: 'github:omdsh-dev/dsh-genui', hasUpdate: false, source: 'other', reason: '不是 registry 版本，无法比较' },

@@ -14,6 +14,7 @@ import {
   classifyPnpmFailure,
   marketChildEnvironment,
   pnpmArgs,
+  describeProgress,
   resolveMarketRuntime,
   runMarketAction,
   withBundleRegistration,
@@ -22,10 +23,24 @@ import {
 } from './market-install.ts'
 
 test('every install pins the exact version; uninstall names the package only', () => {
-  assert.deepEqual(pnpmArgs('install', 'dsh-git-panel', '0.1.20'), ['add', 'dsh-git-panel@0.1.20'])
-  assert.deepEqual(pnpmArgs('update', '@changfenhuang/dsh-genui', '0.12.0'), ['add', '@changfenhuang/dsh-genui@0.12.0'])
-  assert.deepEqual(pnpmArgs('uninstall', 'dsh-git-panel'), ['remove', 'dsh-git-panel'])
-  assert.deepEqual(pnpmArgs('install', 'dsh-git-panel'), ['add', 'dsh-git-panel'])
+  // `--reporter=append-only` 是进度流的前提（逐行输出）；`--prefer-offline` 让精确版本省掉一次
+  // registry 元数据往返——两处都直接决定用户等待时的观感，所以跟着参数一起断言。
+  const appendOnly = '--reporter=append-only'
+  assert.deepEqual(pnpmArgs('install', 'dsh-git-panel', '0.1.20'), ['add', 'dsh-git-panel@0.1.20', appendOnly, '--prefer-offline'])
+  assert.deepEqual(pnpmArgs('update', '@changfenhuang/dsh-genui', '0.12.0'), ['add', '@changfenhuang/dsh-genui@0.12.0', appendOnly, '--prefer-offline'])
+  assert.deepEqual(pnpmArgs('uninstall', 'dsh-git-panel'), ['remove', 'dsh-git-panel', appendOnly])
+  assert.deepEqual(pnpmArgs('install', 'dsh-git-panel'), ['add', 'dsh-git-panel', appendOnly, '--prefer-offline'])
+})
+
+test('pnpm 的进度行被翻译成人话，看不懂的行不冒充进度', () => {
+  assert.deepEqual(describeProgress('Progress: resolved 12, reused 9, downloaded 3, added 0'), { phase: 'download', detail: '已解析 12 · 复用 9 · 下载 3 · 已链接 0' })
+  assert.deepEqual(describeProgress('Progress: resolved 12, reused 10, downloaded 2, added 2'), { phase: 'link', detail: '已解析 12 · 复用 10 · 下载 2 · 已链接 2' })
+  assert.deepEqual(describeProgress('Progress: resolved 1, reused 0, downloaded 0, added 0'), { phase: 'resolve', detail: '已解析 1 · 复用 0 · 下载 0 · 已链接 0' })
+  assert.deepEqual(describeProgress('Packages: +3'), { phase: 'resolve', detail: '共 3 个包' })
+  assert.deepEqual(describeProgress('+ dsh-cost-meter 1.8.26'), { phase: 'link', detail: '已添加 dsh-cost-meter 1.8.26' })
+  assert.deepEqual(describeProgress('Done in 2.5s'), { phase: 'done', detail: '完成，用时 2.5s' })
+  assert.equal(describeProgress('ERR_PNPM_FETCH_404  GET https://registry.npmjs.org/x'), undefined)
+  assert.equal(describeProgress(''), undefined)
 })
 
 test('a plugin must also be registered as a profile bundle, and registration is idempotent', () => {
@@ -125,7 +140,7 @@ test('a successful install registers the bundle and reports pnpm’s own output'
   assert.equal(result.bundleRegistered, true)
   assert.equal(result.spec, 'dsh-cost-meter@1.8.26')
   assert.match(result.output, /Done in 2\.1s/u)
-  assert.deepEqual(runner.calls[0]?.args, ['add', 'dsh-cost-meter@1.8.26'])
+  assert.deepEqual(runner.calls[0]?.args, ['add', 'dsh-cost-meter@1.8.26', '--reporter=append-only', '--prefer-offline'])
   assert.equal(writes.length, 1)
   // The bundled real node is spawned as itself: the environment is passed through unchanged (the
   // test runner's own env already carries ELECTRON_RUN_AS_NODE, which is exactly the point — we do

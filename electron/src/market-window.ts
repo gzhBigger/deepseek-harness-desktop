@@ -15,7 +15,7 @@
 import { BrowserWindow, clipboard, ipcMain } from 'electron'
 import { join } from 'node:path'
 
-import { MARKET_IPC, type MarketActionResultResponse, type MarketLogResponse, type MarketSearchResponse, type MarketUpdateStatusResponse, type MarketView } from './market-ipc.ts'
+import { MARKET_IPC, type MarketActionResultResponse, type MarketLogResponse, type MarketProgressEvent, type MarketSearchResponse, type MarketUpdateStatusResponse, type MarketView } from './market-ipc.ts'
 import type { MarketService } from './market-service.ts'
 import type { MarketAction } from './market-install.ts'
 
@@ -117,6 +117,11 @@ export class MarketWindow {
     return url === '' || url.startsWith('file://')
   }
 
+  /** 把一次进度事件推给本窗口；窗口已关闭时静默丢弃（用户可能已经关窗）。 */
+  #progressSink(): (tick: MarketProgressEvent) => void {
+    return tick => { this.#window?.webContents.send(MARKET_IPC.progress, tick) }
+  }
+
   /** Register the handlers once; every one of them validates the sender first. */
   #register(): void {
     if (this.#registered) return
@@ -180,11 +185,12 @@ export class MarketWindow {
           return { ok: false, action, name: '', spec: '', code: null, output: '缺少插件名', failure: { kind: 'unknown', message: '缺少插件名' }, bundleRegistered: false }
         }
         const wanted = typeof version === 'string' && version !== '' ? version : undefined
+        const sink = this.#progressSink()
         // Install and update are the same pnpm call with a different label; only the wording and the
         // default (the catalog's version) differ, so the window may pass either.
-        if (action === 'uninstall') return await service.uninstall(name)
-        if (action === 'update') return await service.update(name, wanted ?? '')
-        return await service.install(name, wanted ?? '')
+        if (action === 'uninstall') return await service.uninstall(name, sink)
+        if (action === 'update') return await service.update(name, wanted ?? '', sink)
+        return await service.install(name, wanted ?? '', sink)
       }))
 
     ipcMain.handle(MARKET_IPC.profileDir, (event) => guard(event, () => service.profileDir))
@@ -230,7 +236,7 @@ export class MarketWindow {
     }))
 
     ipcMain.handle(MARKET_IPC.githubInstall, (event, input: unknown) => guard(event, async () => {
-      const result = await service.installFromGithub(typeof input === 'string' ? input : '')
+      const result = await service.installFromGithub(typeof input === 'string' ? input : '', this.#progressSink())
       this.#options.log(result.ok
         ? `market github install ok ${result.name} (${result.spec})`
         : `market github install failed ${result.failure?.kind ?? 'unknown'} ${result.failure?.message ?? ''}`)

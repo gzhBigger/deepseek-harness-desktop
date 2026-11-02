@@ -41,6 +41,13 @@ export const MARKET_IPC = {
   note: 'market:note',
   /** Main → renderer: switch the visible view (the 插件 menu opens the installed one). */
   view: 'market:view',
+  /**
+   * Main → renderer: one progress tick while an action runs.
+   *
+   * pnpm 的一次安装要 2 秒到几分钟，而结果只有一个 `ok`。这个通道把「现在在解析/下载/链接」和
+   * 已经跑了多久推给窗口，否则用户在安装期间看到的是一动不动的列表。
+   */
+  progress: 'market:progress',
   /** The profile directory the actions run against (shown in the header). */
   profileDir: 'market:profile-dir',
   /** Put diagnostic text on the clipboard (the "复制诊断信息" button). */
@@ -138,4 +145,18 @@ export interface MarketActionResultResponse {
   readonly output: string
   readonly failure?: MarketFailure
   readonly bundleRegistered: boolean
+}
+
+/**
+ * 一次安装/更新/卸载的进度刻度。
+ *
+ * `phase` 是机器可读的阶段，窗口只用它选一句文案；`detail` 已经把 pnpm 的原始行翻译成人话
+ * （例如「已下载 3 · 已链接 1」），所以窗口不必理解 pnpm 的输出格式。
+ */
+export interface MarketProgressEvent {
+  readonly action: 'install' | 'update' | 'uninstall' | 'github-install'
+  readonly name: string
+  readonly phase: 'starting' | 'resolve' | 'download' | 'link' | 'done' | 'failed'
+  readonly detail: string
+  readonly elapsedMs: number
 }

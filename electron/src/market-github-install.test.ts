@@ -32,14 +32,14 @@ function fakeRuntime(): string {
 }
 
 test('a GitHub spec goes to pnpm verbatim, never as name@version', () => {
-  assert.deepEqual(pnpmArgs('install', 'portable-dsh-multi-agent', undefined, 'github:a/b#v1'), ['add', 'github:a/b#v1'])
+  assert.deepEqual(pnpmArgs('install', 'portable-dsh-multi-agent', undefined, 'github:a/b#v1'), ['add', 'github:a/b#v1', '--reporter=append-only', '--prefer-offline'])
   assert.deepEqual(
     pnpmArgs('install', 'x', '1.0.0', 'https://github.com/a/b/releases/latest/download/b.tgz'),
-    ['add', 'https://github.com/a/b/releases/latest/download/b.tgz'],
+    ['add', 'https://github.com/a/b/releases/latest/download/b.tgz', '--reporter=append-only', '--prefer-offline'],
     'a tarball URL is not something to append a version to',
   )
-  assert.deepEqual(pnpmArgs('install', 'x', '1.0.0'), ['add', 'x@1.0.0'], 'the registry path is unchanged')
-  assert.deepEqual(pnpmArgs('uninstall', 'x'), ['remove', 'x'])
+  assert.deepEqual(pnpmArgs('install', 'x', '1.0.0'), ['add', 'x@1.0.0', '--reporter=append-only', '--prefer-offline'], 'the registry path keeps the pinned version')
+  assert.deepEqual(pnpmArgs('uninstall', 'x'), ['remove', 'x', '--reporter=append-only'])
 })
 
 test('a repository that is not a plugin is refused before pnpm is ever started', async () => {
@@ -94,7 +94,7 @@ test('a GitHub install registers the name the repository declares', async () => 
   })
   const result = await service.installFromGithub('some/portable-dsh-multi-agent-plugin')
   assert.equal(result.ok, true, JSON.stringify(result))
-  assert.deepEqual(asked, [['add', 'github:some/portable-dsh-multi-agent-plugin']])
+  assert.deepEqual(asked, [['add', 'github:some/portable-dsh-multi-agent-plugin', '--reporter=append-only', '--prefer-offline']])
   assert.equal(result.name, 'portable-dsh-multi-agent')
   assert.deepEqual(
     readProfileManifest(profileDir).dsh?.profile?.bundles,

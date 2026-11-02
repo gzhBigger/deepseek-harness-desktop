@@ -71,10 +71,49 @@ export interface MarketActionResult {
  *   tarball URL). The name is then only what gets registered in `dsh.profile.bundles`.
  */
 export function pnpmArgs(action: MarketAction, name: string, version?: string, spec?: string): string[] {
-  if (action === 'uninstall') return ['remove', name]
-  if (spec !== undefined && spec !== '') return ['add', spec]
-  if (version === undefined || version === '') return ['add', name]
-  return ['add', `${name}@${version}`]
+  // `append-only` 是进度流的前提：默认 reporter 在管道里虽然也退化成逐行，但显式指定后输出格式稳定。
+  // `prefer-offline` 让精确版本（`name@1.2.3`，内容不会变）优先用本地元数据，省掉一次 registry 往返。
+  const reporter = '--reporter=append-only'
+  if (action === 'uninstall') return ['remove', name, reporter]
+  if (spec !== undefined && spec !== '') return ['add', spec, reporter, '--prefer-offline']
+  if (version === undefined || version === '') return ['add', name, reporter, '--prefer-offline']
+  return ['add', `${name}@${version}`, reporter, '--prefer-offline']
+}
+
+/** 一行 pnpm 输出翻译成的进度。 */
+export interface ProgressTick {
+  readonly phase: 'resolve' | 'download' | 'link' | 'done'
+  readonly detail: string
+}
+
+/**
+ * 把 pnpm 的输出行翻译成一句进度说明。
+ *
+ * pnpm 在 `--reporter=append-only` 下的进度行形如
+ * `Progress: resolved 12, reused 9, downloaded 3, added 1`，另有 `Packages: +3`、`+ pkg 1.2.3`
+ * 与结尾的 `Done in 3.4s`。看不懂的行返回 `undefined`——不认识的输出不该被当成"进度"，
+ * 否则失败信息里的堆栈会挤进进度条。
+ */
+export function describeProgress(raw: string): ProgressTick | undefined {
+  const line = raw.trim()
+  const progress = /^Progress:\s*resolved\s+(\d+),\s*reused\s+(\d+),\s*downloaded\s+(\d+),\s*added\s+(\d+)/u.exec(line)
+  if (progress !== null) {
+    const [, resolved = '0', reused = '0', downloaded = '0', added = '0'] = progress
+    const phase: ProgressTick['phase'] = Number(added) > 0 ? 'link' : Number(downloaded) > 0 ? 'download' : 'resolve'
+    return {
+      phase,
+      detail: `已解析 ${resolved} · 复用 ${reused} · 下载 ${downloaded} · 已链接 ${added}`,
+    }
+  }
+  const packages = /^Packages:\s*\+(\d+)/u.exec(line)
+  if (packages !== null) return { phase: 'resolve', detail: `共 ${packages[1] ?? '0'} 个包` }
+  const done = /^Done in ([\d.]+m?s)/u.exec(line)
+  if (done !== null) return { phase: 'done', detail: `完成，用时 ${done[1] ?? ''}` }
+  const added = /^\+ (\S+)(?:\s+(\S+))?$/u.exec(line)
+  if (added !== null) {
+    return { phase: 'link', detail: added[2] === undefined ? `已添加 ${added[1] ?? ''}` : `已添加 ${added[1] ?? ''} ${added[2]}` }
+  }
+  return undefined
 }
 
 /**
@@ -245,7 +284,13 @@ export interface MarketInstallOptions {
   /** Writes the profile manifest back. */
   readonly writeManifest: (manifest: ProfileManifest, previous: ProfileManifest) => void
   /** Runs pnpm and resolves with its exit code and combined output. */
-  readonly runPnpm: (args: readonly string[], environment: NodeJS.ProcessEnv) => Promise<{ code: number | null; output: string }>
+  readonly runPnpm: (
+    args: readonly string[],
+    environment: NodeJS.ProcessEnv,
+    onLine?: (line: string) => void,
+  ) => Promise<{ code: number | null; output: string }>
+  /** 每收到一行 pnpm 输出就回调一次（进度条用；失败时也照常收到）。 */
+  readonly onOutput?: (line: string) => void
 }
 
 /** Build the child environment: the app binary needs Node mode, a real node ignores it. */
@@ -280,7 +325,7 @@ export async function runMarketAction(
   let code: number | null = null
   let output = ''
   try {
-    const result = await options.runPnpm(args, environment)
+    const result = await options.runPnpm(args, environment, line => options.onOutput?.(line))
     code = result.code
     output = result.output
   } catch (error) {

@@ -204,6 +204,24 @@
     footer .grow { flex: 1; }
     #activity { color: var(--faint); font-size: var(--t-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50%; }
 
+    /* 安装进度条：一行、不跳动、可扫一眼知道"在解析还是在下东西"。 */
+    .progressbar {
+      display: flex; align-items: center; gap: var(--s3);
+      margin: 0 var(--s4) var(--s2); padding: var(--s2) var(--s3);
+      border: 1px solid var(--line); border-radius: var(--r-md);
+      background: var(--surface); font-size: var(--t-sm); color: var(--fg-2);
+    }
+    .progressbar .grow { flex: 1; }
+    .progressbar.failed { border-color: var(--danger); }
+    .progress-detail { color: var(--muted); direction: ltr; }
+    .progress-time { color: var(--faint); font-family: var(--mono); min-width: 52px; text-align: right; }
+    .spinner {
+      width: 12px; height: 12px; flex: none; border-radius: 50%;
+      border: 2px solid var(--line); border-top-color: var(--accent);
+      animation: spin 700ms linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
     /* README 预览：单列、可滚、图片不出框。内容由主进程解析成白名单节点，这里只负责排版。 */
     #readme-dialog {
       width: min(760px, 92vw); max-height: 82vh; padding: 0; border: 1px solid var(--line);
@@ -287,6 +305,15 @@
       <button id="prev" class="ghost">上一页</button>
       <button id="next" class="ghost">下一页</button>
     </span>
+  </div>
+
+  <!-- 安装进度：两个视图共用。pnpm 跑起来以后每翻译出一句就更新这里，并显示已用时。 -->
+  <div id="progress" class="progressbar" hidden>
+    <span class="spinner" aria-hidden="true"></span>
+    <span id="progress-text">正在安装…</span>
+    <span class="grow"></span>
+    <span id="progress-detail" class="progress-detail"></span>
+    <span id="progress-time" class="progress-time">0.0s</span>
   </div>
 
   <main id="list"></main>
@@ -796,6 +823,7 @@
         }
         el('github-confirm').hidden = true
         githubPending = ''
+        beginProgress('正在从 GitHub 安装 ' + target + ' …')
         const result = await api.installGithub(target)
         if (result.ok) {
           el('failure').hidden = true
@@ -814,13 +842,52 @@
         busy = false
         el('go').disabled = false
         el('github-go').disabled = false
+        endProgress()
       }
     }
 
+    // ── 安装进度 ─────────────────────────────────────────────────────────
+    // 主进程把 pnpm 的每一行翻成 {phase, detail}，这里只负责文案、计时与显隐。一次安装可能要几十秒，
+    // 列表一动不动会让人以为点了个寂寞——进度条要回答的正是"它在动吗、动到哪一步了"。
+    const PHASE_LABEL = { starting: '准备中', resolve: '解析依赖', download: '下载中', link: '安装中', done: '完成', failed: '失败' }
+    let progressStarted = 0
+    let progressTimer = null
+
+    function beginProgress(text) {
+      el('progress').hidden = false
+      el('progress-text').textContent = text
+      el('progress-detail').textContent = ''
+      el('progress-time').textContent = '0.0s'
+      progressStarted = performance.now()
+      if (progressTimer !== null) clearInterval(progressTimer)
+      progressTimer = setInterval(() => {
+        el('progress-time').textContent = ((performance.now() - progressStarted) / 1000).toFixed(1) + 's'
+      }, 100)
+    }
+
+    function updateProgress(event) {
+      if (event === null || typeof event !== 'object') return
+      const verb = event.action === 'uninstall' ? '卸载' : event.action === 'update' ? '更新' : '安装'
+      if (el('progress').hidden) beginProgress('正在' + verb + ' ' + String(event.name || '') + ' …')
+      const phase = PHASE_LABEL[event.phase] || '进行中'
+      el('progress-text').textContent = phase + ' · ' + String(event.name || '')
+      if (typeof event.detail === 'string' && event.detail !== '') el('progress-detail').textContent = event.detail
+      if (typeof event.elapsedMs === 'number' && event.elapsedMs >= 0) el('progress-time').textContent = (event.elapsedMs / 1000).toFixed(1) + 's'
+      el('progress').classList.toggle('failed', event.phase === 'failed')
+    }
+
+    function endProgress() {
+      if (progressTimer !== null) { clearInterval(progressTimer); progressTimer = null }
+      el('progress').hidden = true
+      el('progress').classList.remove('failed')
+    }
+
+    if (typeof api.onProgress === 'function') api.onProgress(event => updateProgress(event))
     async function act(action, name, version) {
       if (busy) return
       busy = true
       el('go').disabled = true
+      beginProgress(`${action === 'uninstall' ? '正在卸载' : action === 'update' ? '正在更新' : '正在安装'} ${name} …`)
       note(`${action === 'uninstall' ? '正在卸载' : action === 'update' ? '正在更新' : '正在安装'} ${name} …`)
       try {
         const result = await api.act(action, name, version)
@@ -831,7 +898,8 @@
           // installed view's versions + diagnosis change the moment a plugin is installed or removed.
           // Doing this automatically is the difference between one click and two.
           if (view === 'installed') await refreshInstalledView()
-          else if (mode === 'catalog') await loadCatalog(catalog.page)
+          // 本地重绘：已装状态来自刚刷新的 installed，没必要为了翻一个标记再拉一遍 5 MB 目录。
+          else if (mode === 'catalog') renderCatalog()
           else render()
           // …and only then say what happened: the refresh writes its own status line, and setting this
           // before it meant every successful install ended with "就绪" instead of "已安装".
@@ -845,6 +913,7 @@
       } finally {
         busy = false
         el('go').disabled = false
+        endProgress()
       }
     }
 

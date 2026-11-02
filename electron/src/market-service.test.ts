@@ -75,6 +75,32 @@ test('a runtime without pnpm reports an actionable failure instead of throwing',
   assert.match(result.failure?.hint ?? '', /重新安装/u)
 })
 
+test('安装过程把 pnpm 的进度翻译成人话推给窗口，并以 done 收尾', async () => {
+  const profileDir = mkdtempSync(join(tmpdir(), 'market-progress-'))
+  writeFileSync(join(profileDir, 'package.json'), JSON.stringify({ name: 'probe-profile', private: true }))
+  const events: { readonly phase: string; readonly detail: string; readonly elapsedMs: number }[] = []
+  const service = new MarketService({
+    profileDir,
+    // The prepared runtime in this checkout: `#act` refuses before spawning if pnpm is not found.
+    runtimeRoot: fileURLToPath(new URL('../runtime/dsh', import.meta.url)),
+    appExecutable: 'x',
+    runPnpmImpl: async (_args, _environment, onLine) => {
+      onLine?.('Progress: resolved 3, reused 1, downloaded 2, added 0')
+      onLine?.('Progress: resolved 3, reused 2, downloaded 1, added 1')
+      onLine?.('Done in 1.2s')
+      return { code: 0, output: 'Done in 1.2s' }
+    },
+  })
+  const result = await service.install('dsh-progress-probe', '1.0.0', event => events.push(event))
+  assert.equal(result.ok, true)
+  // 第一帧必须是 starting：pnpm 起来之前有约一秒的空白，用户需要知道"已经在做了"。
+  assert.equal(events[0]?.phase, 'starting')
+  assert.ok(events.some(event => event.phase === 'download'), '下载阶段应被翻译出来')
+  assert.ok(events.some(event => event.phase === 'link'), '链接阶段应被翻译出来')
+  assert.equal(events.at(-1)?.phase, 'done')
+  assert.ok((events.at(-1)?.elapsedMs ?? -1) >= 0)
+  assert.match(events.at(-1)?.detail ?? '', /完成/u)
+})
 test('installed() lists what the profile declares', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-market-profile-'))
   writeProfileManifest(dir, { dependencies: { 'dsh-cost-meter': '^1.8.26', '@scope/other': 'link:../x' } })

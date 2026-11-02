@@ -19,11 +19,12 @@ import { join } from 'node:path'
 import { packumentUrl, searchMarketPackages, type MarketSearchResult } from './market-catalog.ts'
 import { countByCategory, fetchCatalog, filterByCategory, searchCatalog, sortCatalog, type Catalog, type CatalogSort } from './market-catalog-source.ts'
 import { inspectGithubPlugin } from './market-github.ts'
-import type { MarketSearchRequest } from './market-ipc.ts'
+import type { MarketProgressEvent, MarketSearchRequest } from './market-ipc.ts'
 import { readPluginReadme, type ReadmeFailure, type ReadmeRequest, type ReadmeResult } from './market-readme.ts'
 import { appendMarketLog, marketLogPath, readMarketLog, type MarketLogEntry } from './market-log.ts'
 import { diagnoseConflicts, readConflictWorld, type ConflictFinding, type StoreFacts } from './market-conflict.ts'
 import {
+  describeProgress,
   runMarketAction,
   resolveMarketRuntime,
   type MarketAction,
@@ -41,6 +42,9 @@ export const USER_AGENT = 'dsh-desktop-market/1.0 (+https://github.com/gzhBigger
 
 /** A JSON GET that fails loudly instead of returning `undefined` on an HTTP error. */
 export type JsonFetcher = (url: string) => Promise<unknown>
+
+/** 进度回调：每次 pnpm 输出被翻译成一句人话就调一次。 */
+export type ProgressSink = (event: MarketProgressEvent) => void
 
 /**
  * Fetch JSON with a timeout and an explicit failure for non-2xx.
@@ -89,6 +93,8 @@ export function runPnpm(
     readonly environment: NodeJS.ProcessEnv
     readonly timeoutMs?: number
     readonly appBinary?: boolean
+    /** 每读到一行就回调（进度条用）。行尾的 `\r` 已去掉，空行不回调。 */
+    readonly onLine?: (line: string) => void
   },
 ): Promise<PnpmRunResult> {
   return new Promise(resolve => {
@@ -100,10 +106,22 @@ export function runPnpm(
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let output = ''
+    let pending = ''
+    const emitLines = (text: string): void => {
+      pending += text
+      const parts = pending.split(/\r?\n/u)
+      pending = parts.pop() ?? ''
+      for (const line of parts) {
+        const trimmed = line.trim()
+        if (trimmed !== '') options.onLine?.(trimmed)
+      }
+    }
     const append = (chunk: Buffer): void => {
-      output += chunk.toString('utf8')
+      const text = chunk.toString('utf8')
+      output += text
       // Keep the tail bounded: a pathological install can print megabytes, and the UI shows the end.
       if (output.length > 256 * 1024) output = output.slice(-192 * 1024)
+      if (options.onLine !== undefined) emitLines(text)
     }
     child.stdout?.on('data', append)
     child.stderr?.on('data', append)
@@ -117,6 +135,7 @@ export function runPnpm(
     })
     child.on('close', code => {
       clearTimeout(timer)
+      if (options.onLine !== undefined && pending.trim() !== '') options.onLine(pending.trim())
       resolve({ code, output })
     })
   })
@@ -293,18 +312,18 @@ export class MarketService {
     return catalog
   }
   /** Install an exact version. */
-  install(name: string, version: string): Promise<MarketActionResult> {
-    return this.#act('install', name, version)
+  install(name: string, version: string, onProgress?: ProgressSink): Promise<MarketActionResult> {
+    return this.#act('install', name, version, undefined, onProgress)
   }
 
   /** Move a plugin to an exact version. */
-  update(name: string, version: string): Promise<MarketActionResult> {
-    return this.#act('update', name, version)
+  update(name: string, version: string, onProgress?: ProgressSink): Promise<MarketActionResult> {
+    return this.#act('update', name, version, undefined, onProgress)
   }
 
   /** Remove a plugin and unregister its bundle. */
-  uninstall(name: string): Promise<MarketActionResult> {
-    return this.#act('uninstall', name)
+  uninstall(name: string, onProgress?: ProgressSink): Promise<MarketActionResult> {
+    return this.#act('uninstall', name, undefined, undefined, onProgress)
   }
 
   /**
@@ -319,7 +338,7 @@ export class MarketService {
    *
    * @param input - `owner/repo`, a repository URL, or a release tarball URL (optionally with a ref).
    */
-  async installFromGithub(input: string): Promise<MarketActionResult> {
+  async installFromGithub(input: string, onProgress?: ProgressSink): Promise<MarketActionResult> {
     const getJson = this.#options.fetchJsonImpl ?? (url => fetchJson(url))
     const inspected = await inspectGithubPlugin(getJson, input)
     if ('reason' in inspected) {
@@ -340,7 +359,7 @@ export class MarketService {
     }
     const { source, name, spec, scripts } = inspected.plugin
     this.#options.log?.(`从 GitHub 安装 ${source.owner}/${source.repo} → ${name}${scripts.length === 0 ? '' : `（会执行安装脚本：${scripts.join('、')}）`}`)
-    return this.#act('install', name, undefined, spec)
+    return this.#act('install', name, undefined, spec, onProgress)
   }
 
   /** Read a GitHub source without installing it: what the window shows before the user commits. */
@@ -384,8 +403,13 @@ export class MarketService {
     return value
   }
 
-  async #act(action: MarketAction, name: string, version?: string, spec?: string): Promise<MarketActionResult> {
+  async #act(action: MarketAction, name: string, version?: string, spec?: string, onProgress?: ProgressSink): Promise<MarketActionResult> {
     const { profileDir, runtimeRoot, appExecutable } = this.#options
+    const started = Date.now()
+    const tick = (phase: MarketProgressEvent['phase'], detail: string): void => {
+      onProgress?.({ action, name, phase, detail, elapsedMs: Date.now() - started })
+    }
+    tick('starting', action === "uninstall" ? `正在卸载 ${name}…` : `正在准备 pnpm（${name}）…`)
     // pnpm runs with `cwd` = the profile, and a spawn whose `cwd` does not exist fails with ENOENT
     // **naming the executable** — a message that reads like "the runtime is missing" while the real
     // problem is an empty profile directory (fresh `DSH_HOME`, or a first run before seeding). Creating
@@ -409,15 +433,15 @@ export class MarketService {
       }
     }
     this.#options.log?.(`${action} ${spec ?? name}${version === undefined || spec !== undefined ? '' : `@${version}`}（${runtime.appBinary ? '应用二进制' : '随包 node'}）`)
-    const run = this.#options.runPnpmImpl ?? ((args, environment) => runPnpm({
+    const run = this.#options.runPnpmImpl ?? ((args, environment, onLine) => runPnpm({
       nodeExecutable: runtime.nodeExecutable,
       pnpmEntry: runtime.pnpmEntry,
       args,
       cwd: profileDir,
       environment,
       appBinary: runtime.appBinary,
+      ...(onLine === undefined ? {} : { onLine }),
     }))
-    const started = Date.now()
     const result = await runMarketAction(action, name, {
       profileDir,
       nodeExecutable: runtime.nodeExecutable,
@@ -426,7 +450,14 @@ export class MarketService {
       readManifest: () => readProfileManifest(profileDir),
       writeManifest: manifest => { writeProfileManifest(profileDir, manifest) },
       runPnpm: run,
+      onOutput: line => {
+        const parsed = describeProgress(line)
+        if (parsed !== undefined) tick(parsed.phase, parsed.detail)
+      },
     }, version, spec)
+    tick(result.ok ? 'done' : 'failed', result.ok
+      ? `完成，用时 ${((Date.now() - started) / 1000).toFixed(1)} 秒`
+      : (result.failure?.message ?? "安装失败"))
     // Recorded even when it succeeded: "it worked yesterday" is only checkable if successes are logged.
     this.#record({
       at: new Date().toISOString(),
