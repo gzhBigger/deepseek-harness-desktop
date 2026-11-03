@@ -28,7 +28,11 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
+  BROWSER_CANVAS_HEIGHT,
+  BROWSER_CANVAS_WIDTH,
   BROWSER_HIDDEN_RECT,
+  canvasScale,
+  canvasSurfaceRect,
   mayPlaceSurface,
   clampBrowserRect,
   describeLoadFailure,
@@ -357,6 +361,18 @@ export class BrowserViewManager {
   /** Custom emulated viewport; absent means "use the preset's own size". */
   private customDeviceSize: { width: number; height: number } | undefined
   private deviceRotated = false
+  /**
+   * Cached browser preferences.
+   *
+   * `canvasLock` is consulted on every placement, and placement runs on every resize frame —
+   * re-reading the JSON file there would put disk I/O in the layout path. Refreshed by
+   * {@link prefs} and {@link setPrefs}, which are the only writers.
+   */
+  private prefsCache: BrowserPrefs | undefined
+  /** CDP `scale` currently applied for the canvas lock; 0 means no canvas override is in force. */
+  private appliedCanvasScale = 0
+  /** Coalesces scale updates while the panel is being resized (one CDP command per burst). */
+  private canvasScaleTimer: ReturnType<typeof setTimeout> | undefined
   /** Nonce of the armed pick session; `undefined` while picking is off. */
   private pickNonce: string | undefined
   /** Picks already handed to the panel for the current arming (de-dupes the two transports). */
@@ -679,16 +695,86 @@ export class BrowserViewManager {
     return { ok: true }
   }
 
+  /**
+   * Browser preferences, cached because {@link applyBounds} runs on every resize frame.
+   * Only {@link prefs} and {@link setPrefs} change the cache.
+   */
+  private currentPrefs(): BrowserPrefs {
+    if (this.prefsCache === undefined) this.prefsCache = this.options.prefs.read() ?? DEFAULT_BROWSER_PREFS
+    return this.prefsCache
+  }
+
+  /**
+   * Whether the 1920×1080 canvas is in force right now.
+   *
+   * Device emulation wins over the lock: a user who picked an iPhone viewport asked for that
+   * viewport, and scaling it inside a 1920×1080 canvas would be a second, contradictory claim
+   * about the page's width. The lock comes back as soon as the preset is `desktop` again.
+   */
+  private canvasActive(): boolean {
+    return this.currentPrefs().canvasLock !== false && this.device === 'desktop' && this.customDeviceSize === undefined
+  }
+
+  /**
+   * Where the native surface actually goes.
+   *
+   * With the canvas locked the stage keeps its full size — the panel's chrome is laid out there —
+   * but the page must not: it gets the largest 16:9 rectangle that fits, centred, and its layout
+   * viewport is then scaled into that rectangle. `BROWSER_HIDDEN_RECT` passes through untouched,
+   * so parking keeps parking.
+   */
+  private surfaceRect(rect: BrowserRect): BrowserRect {
+    return this.canvasActive() ? canvasSurfaceRect(rect) : rect
+  }
+
   private applyBounds(rect: BrowserRect): void {
     if (!this.created) return
+    const surface = this.surfaceRect(rect)
     try {
-      this.view?.setBounds(rect)
+      this.view?.setBounds(surface)
     } catch (error) {
       this.options.log(`侧边栏浏览器定位失败：${error instanceof Error ? error.message : String(error)}`)
     }
     // The veil is a sibling native view, so it has to follow every move — and it may only be up
     // while the browser view itself is up (`syncVeil` is the one place that decides that).
-    this.syncVeil(rect)
+    this.syncVeil(surface)
+    this.scheduleCanvasScale(surface)
+  }
+
+  /**
+   * Keep the canvas's CDP scale in step with the surface width.
+   *
+   * The override is renderer state, not view state: the surface is re-placed on every resize
+   * frame, but the scale only has to change when the width does. Coalescing keeps a sidebar drag
+   * from queueing a CDP round-trip per frame; the burst's last frame applies the final scale.
+   */
+  private scheduleCanvasScale(surface: BrowserRect): void {
+    if (!this.canvasActive() || !isUsableBrowserRect(surface)) return
+    const wanted = canvasScale(surface.width)
+    if (Math.abs(wanted - this.appliedCanvasScale) < 0.0005) return
+    if (this.canvasScaleTimer !== undefined) return
+    this.canvasScaleTimer = setTimeout(() => {
+      this.canvasScaleTimer = undefined
+      // The tab may have been closed while the burst was settling; re-applying would build a new
+      // view behind the user's back.
+      if (!this.created) return
+      void this.applyEmulation()
+    }, 40)
+  }
+
+  private clearCanvasScale(): void {
+    if (this.canvasScaleTimer === undefined) return
+    clearTimeout(this.canvasScaleTimer)
+    this.canvasScaleTimer = undefined
+  }
+
+  /**
+   * Re-place the surface after something changed whether the canvas applies (pref toggle, device
+   * preset). Safe when hidden: the next `show` recomputes the placement anyway.
+   */
+  private repositionSurface(): void {
+    if (!this.visibleState) return
+    this.applyBounds(this.lastRect)
   }
 
   /**
@@ -1288,9 +1374,11 @@ export class BrowserViewManager {
     return shown
   }
 
-  /** Browser-owned preferences, read from the shell's userData. */
+  /** Browser-owned preferences, read from the shell's userData. Refreshes the placement cache. */
   prefs(): BrowserCommandResult {
-    return { ok: true, prefs: this.options.prefs.read() }
+    const prefs = this.options.prefs.read() ?? DEFAULT_BROWSER_PREFS
+    this.prefsCache = prefs
+    return { ok: true, prefs }
   }
 
   /** Merge a preferences patch and persist it. */
@@ -1302,6 +1390,14 @@ export class BrowserViewManager {
       this.options.prefs.write(merged.prefs)
     } catch (error) {
       return { ok: false, reason: `偏好写入失败：${error instanceof Error ? error.message : String(error)}` }
+    }
+    this.prefsCache = merged.prefs
+    if (merged.prefs.canvasLock !== current.canvasLock) {
+      // The lock changes both the surface's geometry and the page's layout viewport, so re-place
+      // it now (that is what visibly moves the page) and re-push the override behind it. The
+      // command keeps its synchronous result shape; a CDP failure is logged by `applyEmulation`.
+      this.repositionSurface()
+      void this.applyEmulation()
     }
     return { ok: true, prefs: merged.prefs }
   }
@@ -1410,7 +1506,10 @@ export class BrowserViewManager {
       const spec = DEVICE_SPECS[preset]
       this.customDeviceSize = { width: spec.width, height: spec.height }
     }
-    return await this.applyDevice()
+    // A preset other than `desktop` takes the surface back out of the canvas: without re-placing
+    // it, the phone viewport would stay inside the letterbox rectangle until the panel resizes.
+    this.repositionSurface()
+    return await this.applyEmulation()
   }
 
   /**
@@ -1439,7 +1538,8 @@ export class BrowserViewManager {
       if (typeof patch.rotate !== 'boolean') return { ok: false, reason: 'rotate 参数不合法' }
       this.deviceRotated = patch.rotate
     }
-    return await this.applyDevice()
+    this.repositionSurface()
+    return await this.applyEmulation()
   }
 
   /** The preset's own size, or the fallback for `desktop`. */
@@ -1448,16 +1548,38 @@ export class BrowserViewManager {
   }
 
   /**
-   * Push the current preset + custom size + rotation to CDP. `desktop` with no custom size clears
-   * the override entirely (the real window size comes back).
+   * Push the current emulation to CDP: the locked 1920×1080 canvas, a device preset, or neither.
+   *
+   * One entry point on purpose. "Apply the canvas" and "clear the override" must never be written
+   * as separate call sites, or switching the lock off would leave a 1920px viewport behind while
+   * the surface went back to a 500px sidebar.
    */
-  private async applyDevice(): Promise<BrowserCommandResult> {
+  private async applyEmulation(): Promise<BrowserCommandResult> {
     const created = this.ensureCreated()
     if (!created.ok) return created
+    const canvas = this.canvasActive()
+    const surface = this.surfaceRect(this.lastRect)
+    const scale = canvas && isUsableBrowserRect(surface) ? canvasScale(surface.width) : 1
     const preset = this.device
     const size = this.customDeviceSize
     const rotated = this.deviceRotated
     const applied = await this.withDebugger(async (debuggerSession) => {
+      if (canvas) {
+        // The page lays out at exactly 1920×1080 and Chromium scales the result into the surface.
+        // `deviceScaleFactor` stays 1 (unlike `setZoomFactor`) so screenshots and the agent's
+        // hit-testing keep the real desktop pixel grid; the probes behind that choice are in
+        // .agents/notes/implemented/feature/2026-11-03-sidebar-browser-canvas-lock.md.
+        await debuggerSession.sendCommand('Emulation.setDeviceMetricsOverride', {
+          width: BROWSER_CANVAS_WIDTH,
+          height: BROWSER_CANVAS_HEIGHT,
+          deviceScaleFactor: 1,
+          mobile: false,
+          scale,
+        })
+        await debuggerSession.sendCommand('Emulation.setTouchEmulationEnabled', { enabled: false })
+        await debuggerSession.sendCommand('Emulation.setUserAgentOverride', { userAgent: this.defaultUserAgent })
+        return true
+      }
       if (preset === 'desktop' && size === undefined) {
         await debuggerSession.sendCommand('Emulation.clearDeviceMetricsOverride')
         await debuggerSession.sendCommand('Emulation.setTouchEmulationEnabled', { enabled: false })
@@ -1488,6 +1610,7 @@ export class BrowserViewManager {
       return true
     })
     if (applied !== true) return { ok: false, reason: '设备模拟不可用（CDP 调试器未就绪）' }
+    this.appliedCanvasScale = canvas ? scale : 0
     this.push()
     return { ok: true, state: this.state() }
   }
@@ -1548,6 +1671,7 @@ export class BrowserViewManager {
 
   /** Drop the view entirely (panel tab closed). A later call may create a fresh one. */
   destroy(): void {
+    this.clearCanvasScale()
     this.destroyVeil()
     const view = this.view
     this.view = undefined
@@ -1557,6 +1681,7 @@ export class BrowserViewManager {
     this.indexToSelector = new Map()
     this.debuggerReady = undefined
     this.debuggerQueue = Promise.resolve()
+    this.appliedCanvasScale = 0
     if (view === undefined) return
     this.detach(view)
     this.options.log('侧边栏浏览器视图已销毁')

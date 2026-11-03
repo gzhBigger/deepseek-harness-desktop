@@ -12,7 +12,11 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import {
+  BROWSER_CANVAS_HEIGHT,
+  BROWSER_CANVAS_WIDTH,
   BROWSER_HIDDEN_RECT,
+  canvasScale,
+  canvasSurfaceRect,
   clampBrowserRect,
   describeLoadFailure,
   isAllowedBrowserNavigation,
@@ -63,6 +67,26 @@ test('a collapsed panel parks the view instead of showing a sliver', () => {
   assert.equal(isUsableBrowserRect({ x: 0, y: 0, width: 10, height: 500 }), false)
   assert.equal(isUsableBrowserRect({ x: 0, y: 0, width: 300, height: 0 }), false)
   assert.ok(BROWSER_HIDDEN_RECT.x < -1000)
+})
+
+test('the canvas is the largest 16:9 rectangle that fits, centred and never upscaled', () => {
+  // A wide stage: the 16:9 rectangle is limited by the height, with margins on both sides.
+  assert.deepEqual(canvasSurfaceRect({ x: 10, y: 20, width: 900, height: 300 }), { x: 193, y: 20, width: 533, height: 299 })
+  // A tall, narrow sidebar: limited by the width, with margins above and below.
+  assert.deepEqual(canvasSurfaceRect({ x: 300, y: 0, width: 640, height: 900 }), { x: 300, y: 270, width: 640, height: 360 })
+  // Already larger than 1920×1080: show the canvas at 1:1 with margins instead of stretching it.
+  assert.deepEqual(canvasSurfaceRect({ x: 0, y: 0, width: 2560, height: 1440 }), { x: 320, y: 180, width: BROWSER_CANVAS_WIDTH, height: BROWSER_CANVAS_HEIGHT })
+  // Parking rects must stay parked: they are not a stage.
+  assert.deepEqual(canvasSurfaceRect(BROWSER_HIDDEN_RECT), BROWSER_HIDDEN_RECT)
+})
+
+test('the canvas scale maps the 1920px layout onto the surface width', () => {
+  assert.equal(canvasScale(1920), 1)
+  assert.equal(canvasScale(640), 640 / BROWSER_CANVAS_WIDTH)
+  // A collapsed/absent width must not produce an invalid CDP argument.
+  assert.equal(canvasScale(0), 1)
+  assert.equal(canvasScale(Number.NaN), 1)
+  assert.ok(canvasScale(9999) <= 1)
 })
 
 test('a bare host means HTTPS and HTTP(S) is accepted', () => {

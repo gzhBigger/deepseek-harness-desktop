@@ -133,6 +133,9 @@ window.__ModuleLoader__.load({
       browserDeviceHeight: '高',
       browserDeviceRotate: '旋转',
       browserDeviceReset: '跟随窗口',
+      browserCanvasLock: '锁定 1920×1080 画布（按侧栏宽度缩放）',
+      browserCanvasLockOn: '已锁定 1920×1080 画布，点击改为按侧栏宽高铺满',
+      browserCanvasLockDevice: '设备模拟优先：切回「桌面」预设后画布锁才生效',
       browserDownloads: '下载',
       browserDownloadOpen: '打开',
       browserDownloadReveal: '在文件夹中显示',
@@ -257,6 +260,9 @@ window.__ModuleLoader__.load({
       browserDeviceHeight: 'H',
       browserDeviceRotate: 'Rotate',
       browserDeviceReset: 'Follow the window',
+      browserCanvasLock: 'Lock a 1920×1080 canvas (scaled to the sidebar width)',
+      browserCanvasLockOn: '1920×1080 canvas locked; click to follow the sidebar instead',
+      browserCanvasLockDevice: 'Device emulation wins: the canvas lock applies once the preset is back to Desktop',
       browserDownloads: 'Downloads',
       browserDownloadOpen: 'Open',
       browserDownloadReveal: 'Show in folder',
@@ -565,8 +571,8 @@ window.__ModuleLoader__.load({
      */
     const ELEMENT_REFERENCE_SOURCE = 'desktop-element';
 
-    /** 浏览器偏好的空值（首次读取前用它渲染）。 */
-    const EMPTY_BROWSER_PREFS = { homepage: '', bookmarks: [], bookmarkBarVisible: false };
+    /** 浏览器偏好的空值（首次读取前用它渲染）。画布锁与桥端默认值一致：默认开启。 */
+    const EMPTY_BROWSER_PREFS = { homepage: '', bookmarks: [], bookmarkBarVisible: false, canvasLock: true };
 
     /**
      * 引用通道所需的服务（`apply` 里注入，未就绪就保持 null → 退化为纯文本插入）。
@@ -986,6 +992,8 @@ window.__ModuleLoader__.load({
           homepage: typeof payload.homepage === 'string' ? payload.homepage : '',
           bookmarks: Array.isArray(payload.bookmarks) ? payload.bookmarks : [],
           bookmarkBarVisible: payload.bookmarkBarVisible === true,
+          // 旧偏好文件没有这个字段，桥端会补成 true；这里同样按“缺失即开启”处理。
+          canvasLock: payload.canvasLock !== false,
         });
       };
 
@@ -1447,6 +1455,23 @@ window.__ModuleLoader__.load({
               onClick: () => setDeviceRowOpen((open) => !open),
             },
             '📱',
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              // 画布锁与设备模拟互斥：选了手机预设时按设备宽度渲染，此时按钮只提示、不亮起。
+              title: prefs.canvasLock === false
+                ? t('browserCanvasLock')
+                : view.device === 'desktop'
+                  ? t('browserCanvasLockOn')
+                  : t('browserCanvasLockDevice'),
+              'aria-label': t('browserCanvasLock'),
+              'aria-pressed': prefs.canvasLock === false ? 'false' : 'true',
+              'data-on': prefs.canvasLock !== false && view.device === 'desktop' ? 'true' : 'false',
+              onClick: () => void setPrefsPatch({ canvasLock: prefs.canvasLock !== true }),
+            },
+            '▭',
           ),
           h(
             'button',

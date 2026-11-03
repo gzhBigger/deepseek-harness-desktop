@@ -1,5 +1,5 @@
 /**
- * Browser-owned preferences: homepage, bookmarks, bookmark-bar visibility.
+ * Browser-owned preferences: homepage, bookmarks, bookmark-bar visibility, canvas lock.
  *
  * Deliberately **not** part of `shell-settings.json`. That document is shared with the DSH
  * settings page (three schemas that must stay in step, guarded by `settings-parity.test.ts`),
@@ -26,10 +26,15 @@ export interface BrowserPrefs {
   readonly homepage: string
   readonly bookmarks: readonly BrowserBookmark[]
   readonly bookmarkBarVisible: boolean
+  /**
+   * Pin the page's layout viewport to 1920×1080 and scale it into the panel (see
+   * `canvasSurfaceRect`). On by default: a sidebar-sized viewport is the wrong page to debug.
+   */
+  readonly canvasLock: boolean
 }
 
 export const BROWSER_PREFS_FILENAME = 'browser-prefs.json'
-export const DEFAULT_BROWSER_PREFS: BrowserPrefs = { homepage: '', bookmarks: [], bookmarkBarVisible: false }
+export const DEFAULT_BROWSER_PREFS: BrowserPrefs = { homepage: '', bookmarks: [], bookmarkBarVisible: false, canvasLock: true }
 
 /** One bookmark list is bounded: this is a convenience list, not a library. */
 export const MAX_BOOKMARKS = 200
@@ -82,6 +87,9 @@ export function parseBrowserPrefs(raw: unknown): BrowserPrefs {
     homepage: homepage === '' || isUsableBrowserUrl(homepage) ? homepage : '',
     bookmarks,
     bookmarkBarVisible: record.bookmarkBarVisible === true,
+    // Absent means "written before this setting existed" — the default is on, so a missing
+    // field must not turn the feature off.
+    canvasLock: typeof record.canvasLock === 'boolean' ? record.canvasLock : true,
   }
 }
 
@@ -97,7 +105,7 @@ export function mergeBrowserPrefs(current: BrowserPrefs, patch: unknown): Browse
   const record = asRecord(patch)
   if (record === undefined) return { ok: false, reason: '设置必须是对象' }
   for (const key of Object.keys(record)) {
-    if (!['homepage', 'bookmarks', 'bookmarkBarVisible'].includes(key)) {
+    if (!['homepage', 'bookmarks', 'bookmarkBarVisible', 'canvasLock'].includes(key)) {
       return { ok: false, reason: `未知设置项：${key}` }
     }
   }
@@ -132,7 +140,15 @@ export function mergeBrowserPrefs(current: BrowserPrefs, patch: unknown): Browse
       changed.push('bookmarkBarVisible')
     }
   }
-  return { ok: true, prefs: { homepage, bookmarks, bookmarkBarVisible }, changed }
+  let canvasLock = current.canvasLock
+  if (record.canvasLock !== undefined) {
+    if (typeof record.canvasLock !== 'boolean') return { ok: false, reason: 'canvasLock 必须是布尔值' }
+    if (record.canvasLock !== canvasLock) {
+      canvasLock = record.canvasLock
+      changed.push('canvasLock')
+    }
+  }
+  return { ok: true, prefs: { homepage, bookmarks, bookmarkBarVisible, canvasLock }, changed }
 }
 
 /** Read from disk; every failure falls back to the defaults. */

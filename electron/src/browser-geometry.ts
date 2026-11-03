@@ -115,6 +115,50 @@ export function isUsableBrowserRect(rect: BrowserRect): boolean {
   return rect.width >= BROWSER_MIN_EDGE && rect.height >= BROWSER_MIN_EDGE
 }
 
+/**
+ * The layout viewport the "canvas lock" renders a page at, in CSS pixels.
+ *
+ * A sidebar is ~500px wide, so a page laid out inside it is not the page the user is debugging:
+ * every `@media (min-width: …)`, every responsive breakpoint and every screenshot disagrees with
+ * what a real desktop browser shows at 1920×1080. Canvas lock pins the page's *layout* viewport to
+ * this size and scales the result down to the panel (CDP `Emulation.setDeviceMetricsOverride` with
+ * `scale`), so media queries, screenshots and measured layout match a real desktop while the panel
+ * still fits in the sidebar.
+ */
+export const BROWSER_CANVAS_WIDTH = 1920
+export const BROWSER_CANVAS_HEIGHT = 1080
+
+/**
+ * The largest 16:9 rectangle that fits inside `rect`, centred.
+ *
+ * Never upscales past the canvas itself: a stage wider than 1920 shows the canvas at 1:1 with empty
+ * margins, because blowing the page up would only blur text (and CDP's `scale` is a shrink factor).
+ * A rect too small to show a page is returned untouched — parking rects must stay parked.
+ */
+export function canvasSurfaceRect(rect: BrowserRect): BrowserRect {
+  if (!isUsableBrowserRect(rect)) return rect
+  const fitWidth = rect.height * (BROWSER_CANVAS_WIDTH / BROWSER_CANVAS_HEIGHT)
+  const width = Math.max(1, Math.floor(Math.min(rect.width, fitWidth, BROWSER_CANVAS_WIDTH)))
+  const height = Math.max(1, Math.floor(Math.min(BROWSER_CANVAS_HEIGHT, (width * BROWSER_CANVAS_HEIGHT) / BROWSER_CANVAS_WIDTH)))
+  return {
+    x: rect.x + Math.floor((rect.width - width) / 2),
+    y: rect.y + Math.floor((rect.height - height) / 2),
+    width,
+    height,
+  }
+}
+
+/**
+ * The CDP `scale` that maps the {@link BROWSER_CANVAS_WIDTH} layout onto a surface `width` wide.
+ *
+ * Bounded to (0, 1]: CDP treats it as a shrink factor, and a zero/NaN width (view not placed yet)
+ * must degrade to 1 rather than to an invalid command argument.
+ */
+export function canvasScale(width: number): number {
+  if (!Number.isFinite(width) || width <= 0) return 1
+  return Math.min(1, width / BROWSER_CANVAS_WIDTH)
+}
+
 export type AddressResult =
   | { readonly ok: true; readonly url: string }
   | { readonly ok: false; readonly reason: string }

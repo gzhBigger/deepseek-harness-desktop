@@ -61,13 +61,28 @@ test('the bookmark list is bounded, and titles are trimmed and capped', () => {
   assert.equal(parsed.bookmarks[0]?.title.length, 200)
 })
 
+test('the canvas lock defaults to on, and only a real boolean turns it off', () => {
+  // A file written before this setting existed must keep the feature on.
+  assert.equal(parseBrowserPrefs({ homepage: '' }).canvasLock, true)
+  assert.equal(parseBrowserPrefs({ canvasLock: false }).canvasLock, false)
+  assert.equal(parseBrowserPrefs({ canvasLock: 'no' }).canvasLock, true)
+
+  const off = mergeBrowserPrefs(DEFAULT_BROWSER_PREFS, { canvasLock: false })
+  assert.equal(off.ok, true)
+  if (!off.ok) return
+  assert.equal(off.prefs.canvasLock, false)
+  assert.deepEqual(off.changed, ['canvasLock'])
+  assert.equal(mergeBrowserPrefs(DEFAULT_BROWSER_PREFS, { canvasLock: 'no' }).ok, false)
+})
+
 test('a patch merges without touching what it does not mention', () => {
-  const current = { homepage: 'https://home.example/', bookmarks: [{ url: 'https://a.example/', title: 'A', at: 1 }], bookmarkBarVisible: true }
+  const current = { homepage: 'https://home.example/', bookmarks: [{ url: 'https://a.example/', title: 'A', at: 1 }], bookmarkBarVisible: true, canvasLock: true }
   const merged = mergeBrowserPrefs(current, { bookmarkBarVisible: false })
   assert.equal(merged.ok, true)
   if (!merged.ok) return
   assert.equal(merged.prefs.homepage, current.homepage)
   assert.deepEqual(merged.prefs.bookmarks, current.bookmarks)
+  assert.equal(merged.prefs.canvasLock, true)
   assert.deepEqual(merged.changed, ['bookmarkBarVisible'])
 })
 
@@ -87,7 +102,7 @@ test('an unknown key, a bad URL or a partly-bad bookmark list is rejected whole'
 
 test('the bookmark list is replaced wholesale, in the order the panel sent it', () => {
   const merged = mergeBrowserPrefs(
-    { homepage: '', bookmarks: [{ url: 'https://old.example/', title: 'old', at: 1 }], bookmarkBarVisible: false },
+    { homepage: '', bookmarks: [{ url: 'https://old.example/', title: 'old', at: 1 }], bookmarkBarVisible: false, canvasLock: true },
     { bookmarks: [{ url: 'https://b.example/', title: 'B', at: 2 }, { url: 'https://a.example/', title: 'A', at: 3 }] },
   )
   assert.equal(merged.ok, true)
