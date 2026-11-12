@@ -70,10 +70,19 @@ SHA-256 为 `0209f232…8db9c`，与本地构建出的坏页面逐字节一致�
 - `npm run preview:settings` 生成的 stub 页面在侧栏浏览器中打开：服务端口显示 `41729`，关闭行为选中
   「最小化到托盘」，当前状态区显示版本、端口、profile 与设置文件路径——`fill()` 确实执行了。
 
+## Release
+
+- 2026-11-12 发布 `v0.4.24`：https://github.com/gzhBigger/deepseek-harness-desktop/releases/tag/v0.4.24
+- 发布产物 `DSH.Desktop_0.4.24_x64-setup.exe`：235,579,692 B，
+  SHA-256 `e15056b5482a9054500067fc33a802fd14a5280f8b831a7c0642a535612a479a`。
+  线上 `latest.json` 与本地逐字段一致（含 signature），安装包 URL 匿名返回 200。
+- 从发布包 `app.asar` 抽出的 `dist/settings/index.html` 为 11,242 B /
+  `08f41d49…`，确认修复进入了实际安装包，而不是只存在于源码。
+- 已安装的 `0.4.23` 会在下次启动检查时收到 `0.4.24`；自动更新只对 NSIS 安装包生效。
+
 ## Consequences
 
 - 源码里的设置页恢复可用，配置无需迁移；`shell-settings.json` 全程未被修改。
-- 已安装的 `0.4.23` 仍然是坏页面——它打包的是旧 `app.asar`，要等下一版发布并走自动更新才会修好。
 - 新增的编译守卫只覆盖设置页；其他壳页面（launcher、market-ui 等）仍是内联脚本，本次没有一并外置。
   若再次出现同类整页空白，应优先考虑把所有内联脚本交给构建期编译。
 - 测试数量从 668 增至 669，运行时间增加不到 1 ms。
