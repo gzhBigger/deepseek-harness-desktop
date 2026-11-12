@@ -74,7 +74,15 @@ export function pnpmArgs(action: MarketAction, name: string, version?: string, s
   // `append-only` 是进度流的前提：默认 reporter 在管道里虽然也退化成逐行，但显式指定后输出格式稳定。
   // `prefer-offline` 让精确版本（`name@1.2.3`，内容不会变）优先用本地元数据，省掉一次 registry 往返。
   const reporter = '--reporter=append-only'
-  if (action === 'uninstall') return ['remove', name, reporter]
+  if (action === 'uninstall') {
+    // pnpm 11 applies the minimumReleaseAge policy to `remove` too, even though removing a
+    // package installs nothing. Worse, when the policy fires there it dies with
+    // ERR_PNPM_RESOLUTION_POLICY_VIOLATIONS_UNHANDLED instead of a readable version warning.
+    // Disabling the policy for this one command is safe: `remove` only takes packages away.
+    // This also works when the profile already has `trustLockfile: true`, which does not cover
+    // the removal path (verified against pnpm 11.7.0).
+    return ['remove', name, reporter, '--config.minimumReleaseAge=0']
+  }
   if (spec !== undefined && spec !== '') return ['add', spec, reporter, '--prefer-offline']
   if (version === undefined || version === '') return ['add', name, reporter, '--prefer-offline']
   return ['add', `${name}@${version}`, reporter, '--prefer-offline']
@@ -246,12 +254,21 @@ function refineTooNew(text: string, failure: MarketFailure): MarketFailure {
  *
  * @param output - Combined stdout/stderr.
  * @param code - pnpm's exit code.
+ * @param action - The action that produced the output; uninstall gets a message that does not
+ *   tell the user to reinstall a package they are trying to remove.
  */
-export function classifyPnpmFailure(output: string, code: number | null): MarketFailure | undefined {
+export function classifyPnpmFailure(output: string, code: number | null, action: MarketAction = 'install'): MarketFailure | undefined {
   if (code === 0) return undefined
   const text = output
   for (const rule of FAILURE_RULES) {
     if (rule.test.test(text)) {
+      if (rule.kind === 'too-new' && action === 'uninstall') {
+        return {
+          kind: 'too-new',
+          message: '卸载被 pnpm 的「新版本冷静期」策略拦住了；移除包本身不需要冷静期，这是 pnpm 的策略误用',
+          hint: '重试一次；如果仍然失败，请把下方的 pnpm 完整输出发出来',
+        }
+      }
       const failure: MarketFailure = { kind: rule.kind, message: rule.message, ...(rule.hint === undefined ? {} : { hint: rule.hint }) }
       return rule.kind === 'too-new' ? refineTooNew(text, failure) : failure
     }
@@ -332,7 +349,7 @@ export async function runMarketAction(
     output = error instanceof Error ? error.message : String(error)
   }
 
-  const failure = classifyPnpmFailure(output, code)
+  const failure = classifyPnpmFailure(output, code, action)
   if (failure !== undefined) return { ok: false, action, name, spec: installedSpec, code, output, failure, bundleRegistered: false }
 
   const previous = options.readManifest()

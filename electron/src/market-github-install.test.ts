@@ -39,7 +39,7 @@ test('a GitHub spec goes to pnpm verbatim, never as name@version', () => {
     'a tarball URL is not something to append a version to',
   )
   assert.deepEqual(pnpmArgs('install', 'x', '1.0.0'), ['add', 'x@1.0.0', '--reporter=append-only', '--prefer-offline'], 'the registry path keeps the pinned version')
-  assert.deepEqual(pnpmArgs('uninstall', 'x'), ['remove', 'x', '--reporter=append-only'])
+  assert.deepEqual(pnpmArgs('uninstall', 'x'), ['remove', 'x', '--reporter=append-only', '--config.minimumReleaseAge=0'])
 })
 
 test('a repository that is not a plugin is refused before pnpm is ever started', async () => {

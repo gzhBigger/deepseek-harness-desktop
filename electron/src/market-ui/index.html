@@ -857,8 +857,10 @@
     const PHASE_LABEL = { starting: '准备中', resolve: '解析依赖', download: '下载中', link: '安装中', done: '完成', failed: '失败' }
     let progressStarted = 0
     let progressTimer = null
+    let progressClosed = false
 
     function beginProgress(text) {
+      progressClosed = false
       el('progress').hidden = false
       el('progress-text').textContent = text
       el('progress-detail').textContent = ''
@@ -871,6 +873,7 @@
     }
 
     function updateProgress(event) {
+      if (progressClosed) return
       if (event === null || typeof event !== 'object') return
       const verb = event.action === 'uninstall' ? '卸载' : event.action === 'update' ? '更新' : '安装'
       if (el('progress').hidden) beginProgress('正在' + verb + ' ' + String(event.name || '') + ' …')
@@ -882,6 +885,7 @@
     }
 
     function endProgress() {
+      progressClosed = true
       if (progressTimer !== null) { clearInterval(progressTimer); progressTimer = null }
       el('progress').hidden = true
       el('progress').classList.remove('failed')
@@ -896,8 +900,13 @@
       note(`${action === 'uninstall' ? '正在卸载' : action === 'update' ? '正在更新' : '正在安装'} ${name} …`)
       try {
         const result = await api.act(action, name, version)
+        // The action is over the moment pnpm exits. Everything below is a *refresh* and may take
+        // as long as the registry does; keeping the action timer running through it made a finished
+        // install look stuck at 3% for minutes. Late progress events are ignored via progressClosed.
+        endProgress()
         if (result.ok) {
           el('failure').hidden = true
+          note(`${name} ${action === 'uninstall' ? '已卸载' : '已安装'}（正在刷新列表…）`)
           await refreshInstalled()
           // Keep whichever view is on screen current: the market's cards show installed state, and the
           // installed view's versions + diagnosis change the moment a plugin is installed or removed.
@@ -1031,11 +1040,24 @@
 
     async function refreshInstalledView() {
       note('正在检查已安装插件的版本…')
-      el('installed-list').replaceChildren()
-      const block = document.createElement('div')
-      block.className = 'skeleton'
-      el('installed-list').append(block)
-      updateStatuses = await api.updates().catch(() => [])
+      // Paint the installed list immediately from the profile facts we already have. The registry
+      // check below only changes the version badges; it must not hold the whole page hostage.
+      if (installed.size > 0) {
+        updateStatuses = Array.from(installed, ([name, meta]) => ({
+          name,
+          current: meta.version || meta.spec,
+          hasUpdate: false,
+          source: 'other',
+          reason: '正在检查版本',
+        }))
+        renderInstalled()
+      } else {
+        el('installed-list').replaceChildren()
+        const block = document.createElement('div')
+        block.className = 'skeleton'
+        el('installed-list').append(block)
+      }
+      updateStatuses = await api.updates().catch(() => updateStatuses)
       renderInstalled()
       report(`rendered ${updateStatuses.length} installed cards`)
       await refreshLog().catch(() => {})

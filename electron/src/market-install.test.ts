@@ -28,7 +28,7 @@ test('every install pins the exact version; uninstall names the package only', (
   const appendOnly = '--reporter=append-only'
   assert.deepEqual(pnpmArgs('install', 'dsh-git-panel', '0.1.20'), ['add', 'dsh-git-panel@0.1.20', appendOnly, '--prefer-offline'])
   assert.deepEqual(pnpmArgs('update', '@changfenhuang/dsh-genui', '0.12.0'), ['add', '@changfenhuang/dsh-genui@0.12.0', appendOnly, '--prefer-offline'])
-  assert.deepEqual(pnpmArgs('uninstall', 'dsh-git-panel'), ['remove', 'dsh-git-panel', appendOnly])
+  assert.deepEqual(pnpmArgs('uninstall', 'dsh-git-panel'), ['remove', 'dsh-git-panel', appendOnly, '--config.minimumReleaseAge=0'])
   assert.deepEqual(pnpmArgs('install', 'dsh-git-panel'), ['add', 'dsh-git-panel', appendOnly, '--prefer-offline'])
 })
 
@@ -97,6 +97,14 @@ test('a generic too-new failure still suggests the lockfile escape hatch', () =>
   const failure = classifyPnpmFailure('ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION published too recently', 1)
   assert.equal(failure?.kind, 'too-new')
   assert.match(failure?.hint ?? '', /trustLockfile: true/u)
+})
+
+test('an uninstall blocked by the release-age policy is not described as a reinstall', () => {
+  const failure = classifyPnpmFailure('ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION published too recently', 1, 'uninstall')
+  assert.equal(failure?.kind, 'too-new')
+  assert.match(failure?.message ?? '', /卸载/u)
+  assert.doesNotMatch(failure?.message ?? '', /再装/u)
+  assert.doesNotMatch(failure?.hint ?? '', /再装/u)
 })
 
 test('an unclassified failure still carries the first error line, not just an exit code', () => {

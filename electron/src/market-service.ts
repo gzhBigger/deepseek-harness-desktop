@@ -494,29 +494,28 @@ export class MarketService {
    */
   async checkUpdates(): Promise<readonly MarketUpdateStatus[]> {
     const getJson = this.#options.fetchJsonImpl ?? (url => fetchJson(url))
-    const statuses: MarketUpdateStatus[] = []
-    for (const entry of this.installed()) {
+    // One plugin per registry request; do them together so the installed view does not spend
+    // N × the fetch timeout waiting for the slowest registry before it can render anything.
+    return await Promise.all(this.installed().map(async (entry): Promise<MarketUpdateStatus> => {
       const source = specSource(entry.spec)
       if (source !== 'registry') {
-        statuses.push({ name: entry.name, current: entry.spec, hasUpdate: false, source, reason: '不是 registry 版本，无法比较' })
-        continue
+        return { name: entry.name, current: entry.spec, hasUpdate: false, source, reason: '不是 registry 版本，无法比较' }
       }
       const current = stripRangePrefix(entry.spec)
       try {
         const document = await getJson(packumentUrl(entry.name))
         const latest = latestVersion(document)
-        statuses.push({
+        return {
           name: entry.name,
           current,
           ...(latest === undefined ? {} : { latest }),
           hasUpdate: latest !== undefined && compareVersions(latest, current) > 0,
           source: 'registry',
-        })
+        }
       } catch (error) {
-        statuses.push({ name: entry.name, current, hasUpdate: false, source: 'registry', reason: error instanceof Error ? error.message : String(error) })
+        return { name: entry.name, current, hasUpdate: false, source: 'registry', reason: error instanceof Error ? error.message : String(error) }
       }
-    }
-    return statuses
+    }))
   }
 
   /**

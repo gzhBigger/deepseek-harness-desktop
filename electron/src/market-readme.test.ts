@@ -202,6 +202,43 @@ test('readPluginReadme：从 GitHub 读 README，并把图片内联成 data URL'
   assert.match(images[0]?.node.src ?? '', /^data:image\/png;base64,/u)
 })
 
+test('readPluginReadme：多张图片并发抓取，不按顺序各等一个超时', async () => {
+  let started = 0
+  let releaseImages: (() => void) | undefined
+  const allStarted = new Promise<void>(resolve => { releaseImages = resolve })
+  const impl = (async (input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+    if (url.endsWith('/README.md')) {
+      return new Response('# R\n\n![a](images/a.png)\n\n![b](images/b.png)\n\n![c](images/c.png)', { status: 200 })
+    }
+    if (url.includes('/images/')) {
+      started += 1
+      // Sequential code would await the first response forever: all three requests must be in
+      // flight before any of them is allowed to finish.
+      if (started === 3) releaseImages?.()
+      await allStarted
+      return new Response('PNG', { status: 200, headers: { 'content-type': 'image/png' } })
+    }
+    throw new Error(`unexpected request: ${url}`)
+  }) as typeof fetch
+
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('images were fetched sequentially')), 1_000)
+  })
+  try {
+    const result = await Promise.race([
+      readPluginReadme({ name: 'p', url: 'https://github.com/o/r' }, { fetchImpl: impl }),
+      timeout,
+    ])
+    assert.equal(result.ok, true)
+    if (!result.ok) return
+    assert.equal(result.images, 3)
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+})
+
 test('readPluginReadme：找不到 README 时给出可读的失败原因', async () => {
   const fetchMock = fakeFetch({})
   const result = await readPluginReadme({ name: '@scope/none' }, { fetchImpl: fetchMock.impl })

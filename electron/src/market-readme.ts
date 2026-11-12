@@ -746,9 +746,20 @@ export async function readPluginReadme(request: ReadmeRequest, deps: ReadmeDeps 
   const base = repo === undefined ? undefined : `https://raw.githubusercontent.com/${repo.owner}/${repo.repo}/HEAD/`
   let nodes = renderMarkdown(found.markdown, base === undefined ? {} : { base })
 
+  // Fetch the first MAX_IMAGES images **concurrently**. The old loop awaited one image at a time,
+  // so a README with a dozen slow images could keep the preview open for 12 × the 12s timeout.
+  // Nothing here needs the images in order, and the total byte budget is enforced below.
+  const imageEntries = collectImages(nodes)
+  const pending = imageEntries
+    .filter(({ node }) => node.src !== undefined && !node.src.startsWith('data:image/'))
+    .slice(0, MAX_IMAGES)
+  const fetched = await Promise.all(pending.map(({ node }) => fetchImageDataUrl(node.src ?? '', deps)))
+  const imageData = new Map(pending.map((entry, index) => [entry, fetched[index]]))
+
   let used = 0
   let inlined = 0
-  for (const { node, path } of collectImages(nodes)) {
+  for (const entry of imageEntries) {
+    const { node, path } = entry
     const source = node.src
     // README 里自带的 data URL 不用再抓，也不能当成远程地址去 fetch。
     if (source !== undefined && source.startsWith('data:image/')) continue
@@ -756,7 +767,7 @@ export async function readPluginReadme(request: ReadmeRequest, deps: ReadmeDeps 
       nodes = replaceAt(nodes, path, { tag: 'span', className: 'md-image-missing', children: [textNode(`[图片：${node.alt === undefined || node.alt === '' ? '未内联' : node.alt}]`)] })
       continue
     }
-    const data = source === undefined ? undefined : await fetchImageDataUrl(source, deps)
+    const data = imageData.get(entry)
     if (data === undefined || used + data.bytes > MAX_TOTAL_IMAGE_BYTES) {
       const label = node.alt === undefined || node.alt === '' ? (source ?? '图片') : node.alt
       nodes = replaceAt(nodes, path, { tag: 'span', className: 'md-image-missing', children: [textNode(`[图片：${label}]`)] })

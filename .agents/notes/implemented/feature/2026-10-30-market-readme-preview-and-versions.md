@@ -24,6 +24,7 @@ type ReadmeNode = { text: string } | { tag: string; children?: ReadmeNode[]; hre
 
 - **来源**：目录条目/依赖 spec 能解析出 GitHub 仓库就先读 `raw.githubusercontent.com/<owner>/<repo>/HEAD/{README.md,readme.md,README.markdown,Readme.md}`；否则退回 npm packument 的 `readme` 字段（`/registry.npmjs.org/<name>/<version>`，再退 `/…/<name>`）。
 - **图片**：README 里的相对路径按仓库 raw 前缀解析；只接受 **https 公网主机**（`isPublicHttpUrl` 拒绝 localhost、`.local`/`.internal`、IPv4 私网/回环/链路本地/CGNAT、IPv6 回环与 `fe80::`/`fc00::/7`），取回后转 data URL。这道闸是为了不让任意 README 把主进程当成内网探测器（`169.254.169.254` 那类地址是真实存在的手法）。
+- **图片并发（2026-11-12）**：先筛出前 `MAX_IMAGES`（12）个远程图片，用 `Promise.all` 同时抓，再按原顺序套用单图/总量上限。原来逐个 `await`，每张 12 秒超时，最坏约 144 秒；现在最坏约 12 秒。并发测试用 gate 钉住「三张图必须同时在飞」。
 - **上限**：README 512 KiB、单图 2 MiB、单次预览最多 12 张图/合计 8 MiB；超限或取不到 → 降级成 `[图片：alt]` 文字，**不报错**。
 - **缓存**：`MarketService` 按 `name@version|url|spec` 记忆 10 分钟，列表与已安装视图各点一次不会重复打 GitHub/npm。
 - **Markdown 子集**：标题、段落、列表（含缩进嵌套）、引用、代码块、表格、分割线、行内代码/强调/链接/图片。
