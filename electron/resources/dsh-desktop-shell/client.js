@@ -2189,6 +2189,33 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * 桌面端不需要的两个入口：
+     *   - 侧栏面板列表里的「更多」菜单（宿主把未固定面板收在这里）；
+     *   - 会话顶部视图标签右侧的「…」溢出菜单。
+     * 两者都是宿主按「有入口动作」自动挂上的，没有开关；用稳定的 CSS Modules
+     * 后缀做结构选择，避免依赖中文 aria-label。注入失败只影响这两个入口。
+     */
+    const UI_TRIM_CSS = `
+      [class*="panelList"] > [class*="moreAnchor"] { display: none !important; }
+      [data-conversation-tabs] + [class*="viewsMoreAnchor"] { display: none !important; }
+    `;
+
+    function installUiTrim() {
+      if (typeof document === 'undefined') return 'unavailable';
+      try {
+        if (document.getElementById('dsh-desktop-ui-trim') !== null) return 'already';
+        const style = document.createElement('style');
+        style.id = 'dsh-desktop-ui-trim';
+        style.textContent = UI_TRIM_CSS;
+        document.head.append(style);
+        return 'installed';
+      } catch (error) {
+        console.warn('[dsh-desktop-shell] 界面精简样式注入失败', error);
+        return 'failed';
+      }
+    }
+
     /** 注入一次；失败不影响 DSH（插件抛错会让整个界面起不来）。 */
     function installPhoneStyles() {
       try {
@@ -2207,6 +2234,8 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       try {
+        const uiTrim = installUiTrim();
+        if (uiTrim !== 'unavailable') console.log('[dsh-desktop-shell] 界面精简：' + uiTrim);
         // 手机端：先量一次，等界面稳定后再量一次（首屏与稳定后的布局不同）。
         try {
           console.log('[dsh-pocket] 手机端样式：' + installPhoneStyles());
