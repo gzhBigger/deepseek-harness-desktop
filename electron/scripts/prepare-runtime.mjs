@@ -441,18 +441,15 @@ const entryRelative = 'node_modules/@deepseek-ai/dsh/lib/bin.js'
 const entryPath = join(output, entryRelative)
 if (!existsSync(entryPath)) fail(`随包运行时缺少入口 ${entryRelative}`)
 
-// 引导插画外置：settings-account 的 bundle 把 8 张 webp 内联成 3.4 MB，而 DSH 的模块装载器
-// 把每个模块的完整源码塞进**启动批次**，手机不打开设置页也要下载它。这里改写随包产物的
-// 那一份（图片落到桌面壳的 extraResources 目录，由它的 web 路由按 immutable 缓存提供）。
-// 必须在清单枚举之前跑：bundle 被改写后大小变了，清单得记录新的那份。
-const { patchOnboardingAssets } = await import('../src/onboarding-assets.ts')
-const shellResourceDir = join(root, 'resources', 'dsh-desktop-shell')
-const slimmed = patchOnboardingAssets({ runtimeDir: output, shellDir: shellResourceDir })
-if (!slimmed.patched) fail(`settings-account 的引导插画没有内联 webp 可外置：${slimmed.bundlePath}`)
-log(
-  `    ✔ 引导插画外置：${String(slimmed.assetCount)} 张 / ${mib(slimmed.assetBytes)}，` +
-    `settings-account bundle ${mib(slimmed.bundleBytesBefore)} → ${mib(slimmed.bundleBytesAfter)}`,
-)
+// 引导插画：dsh 0.2.2 起上游自己把 8 张 onboarding webp 作为真实资源随包发出
+// （`require.asset('plugins/…/assets/onboarding-*.webp')`），桌面壳不再需要从 bundle 里搬。
+// 保留这条断言：如果上游又退回 base64 内联，构建应当失败，而不是让手机首屏重新背上 3 MB。
+const settingsAccountBundle = join(output, 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-account', 'lib', 'client.js')
+if (!existsSync(settingsAccountBundle)) fail(`随包运行时缺少 settings-account 客户端包：${settingsAccountBundle}`)
+if (readFileSync(settingsAccountBundle, 'utf8').includes('data:image/webp;base64,')) {
+  fail('settings-account 的引导插画又变成 base64 内联了：需要恢复外置步骤（见 docs/electron-runtime-bundling.md）')
+}
+log('    ✔ 引导插画由上游外置，无需改写 bundle')
 
 const files = []
 /** The manifest describes the tree; it is not part of it. Re-running prepare leaves the previous

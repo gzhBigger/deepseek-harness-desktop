@@ -24,7 +24,7 @@
 
 `scripts/prepare-runtime.mjs`（`pnpm runtime:prepare`，也被两个打包脚本自动调用）：
 
-1. 读 `runtime-pin.json` 的 pinned 版本（当前 `0.2.0-rc.1`），在 `.runtime-build/` 里
+1. 读 `runtime-pin.json` 的 pinned 版本（当前值见该文件），在 `.runtime-build/` 里
    `npm install --omit=dev --os=win32 --cpu=x64`（按目标平台安装，跳过其他平台的可选依赖）；
 2. **替换原生模块加载器（最关键的一条）**：dsh 通过 `node-addon-require-builtin` 取 Node 内部模块，
    上游二进制内嵌一张只认少数 Electron 构建的指纹表。脚本把它连同平台预构建与

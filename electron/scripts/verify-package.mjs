@@ -140,10 +140,10 @@ if (packaged.dsh !== expected.dsh || packaged.listDigest !== expected.listDigest
   fail(`随包运行时与源不一致（dsh ${String(packaged.dsh)} vs ${String(expected.dsh)}）`)
 }
 
-// 手机首屏瘦身：settings-account 的 8 张引导插画必须已经搬出 bundle，并且真的随安装包发出去了。
-// 少了这一步，手机每次打开页面都要多下 3 MB —— 不报错，只是慢，所以只能在这里钉住。
-const { ONBOARDING_IMAGE_COUNT, ONBOARDING_ROUTE } = await import('../src/onboarding-assets.ts')
-const settingsAccountBundle = join('dsh', 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-account', 'lib', 'client.js')
+// 手机首屏瘦身：0.2.2 起 settings-account 的 8 张引导插画由上游作为真实资源随包发出。
+// 这里钉住三件事：bundle 不能退回 base64 内联、8 个 webp 引用都在、被引用的文件真的进了 asar。
+const SETTINGS_ACCOUNT_ASSETS = join('dsh', 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-account', 'lib', 'assets')
+const settingsAccountBundle = join(SETTINGS_ACCOUNT_ASSETS, '..', 'client.js')
 let settingsAccountText = ''
 try {
   settingsAccountText = (await archive.readFile(settingsAccountBundle)).toString('utf8')
@@ -151,17 +151,22 @@ try {
   fail(`app.asar 里没有 settings-account 客户端包 ${settingsAccountBundle}：${String(error)}`)
 }
 if (settingsAccountText.includes('data:image/webp;base64,')) {
-  fail('settings-account 的引导插画仍内联在 bundle 里（prepare-runtime 的外置步骤没生效）')
+  fail('settings-account 的引导插画又内联回 bundle 了（0.2.2 上游应当把它作为独立资源发出）')
 }
-const onboardingFiles = [
-  ...settingsAccountText.matchAll(new RegExp(`${ONBOARDING_ROUTE}/([a-z0-9-]+\\.webp)`, 'gu')),
-].map((match) => match[1] ?? '')
-if (onboardingFiles.length !== ONBOARDING_IMAGE_COUNT) {
-  fail(`settings-account bundle 里引用了 ${String(onboardingFiles.length)} 张引导插画，期望 ${String(ONBOARDING_IMAGE_COUNT)} 张`)
+const onboardingFiles = [...new Set(
+  [...settingsAccountText.matchAll(/onboarding-[a-z0-9-]+\.webp/gu)].map((match) => match[0]),
+)]
+if (onboardingFiles.length !== 8) {
+  fail(`settings-account bundle 里引用了 ${String(onboardingFiles.length)} 张引导插画，期望 8 张`)
 }
 for (const fileName of onboardingFiles) {
-  const path = join(resources, 'dsh-desktop-shell', 'onboarding', fileName)
-  if (!existsSync(path)) fail(`桌面壳资源里缺少引导插画 ${fileName}（extraResources 没带上）`)
+  let data
+  try {
+    data = await archive.readFile(join(SETTINGS_ACCOUNT_ASSETS, fileName))
+  } catch (error) {
+    fail(`app.asar 里缺少引导插画 ${fileName}：${String(error)}`)
+  }
+  if (data.byteLength === 0) fail(`app.asar 里的引导插画是空文件：${fileName}`)
 }
 
 // Walk the archive the same way the runtime verification does: every file under `dsh/`.
@@ -375,8 +380,20 @@ async function verifyProfileComposition() {
     // Mounting is not enough: the packaged copy has to be importable by its own entry point. A
     // plugin missing a directory it imports (`src/host/*` was dropped from the copy) mounts, warns
     // `entries did not activate`, and its panels stay absent with the same user-visible result.
-    const activationFailures = shellLog.split(/\r?\n/u)
-      .filter(line => line.includes('did not activate') || line.includes('failed to import'))
+    //
+    // The warning is generic and 0.2.2 also emits it for an upstream client module that is merely
+    // waiting for a service (`dsh-client-ui-account-notifications: pending (waiting for service:
+    // accountUi)`). Only treat a warning as ours when its block names one of the shipped plugins
+    // (or any import failure); otherwise a healthy upstream wait would fail every package build.
+    const activationFailures = []
+    const logLines = shellLog.split(/\r?\n/u)
+    for (let index = 0; index < logLines.length; index += 1) {
+      const line = logLines[index]
+      if (!line.includes('did not activate') && !line.includes('failed to import')) continue
+      const block = logLines.slice(index, index + 4).join('\n')
+      const ours = [...pluginsManifest.packages, 'dsh-desktop-shell'].some(name => block.includes(name))
+      if (block.includes('failed to import') || ours) activationFailures.push(block)
+    }
     if (activationFailures.length > 0) {
       throw new Error(`随壳插件在打包 dsh 里没有激活：${activationFailures.slice(0, 3).join('；')}`)
     }
