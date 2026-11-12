@@ -945,35 +945,112 @@ window.__ModuleLoader__.load({
         void send({ name: 'diag', text: String(text).slice(0, 300) });
       }, [send]);
 
-      const freeze = async () => {
-        const result = await send({ name: 'freeze' });
-        if (result === null || typeof result !== 'object') {
-          diag('冻结：主进程没有响应');
-          return;
-        }
-        // 没有可见的原生表面（空标签、或标签已被 park）：菜单直接画在空舞台上就行，
-        // 不要显示「页面已暂停」这种会让人以为坏了的提示。
-        if (result.frozen === false) {
+      // 冻结原因可能重叠：菜单和 DSH 弹窗都要求浏览器让位时，最后一方解除才恢复。
+      const freezeReasons = React.useRef(new Set());
+      const freezeRun = React.useRef(Promise.resolve());
+      const freeze = React.useCallback((reason = 'menu') => {
+        const wasFrozen = freezeReasons.current.size > 0;
+        freezeReasons.current.add(reason);
+        if (wasFrozen) return freezeRun.current;
+        freezeRun.current = freezeRun.current.then(async () => {
+          if (freezeReasons.current.size === 0) return;
+          const result = await send({ name: 'freeze' });
+          if (result === null || typeof result !== 'object') {
+            diag('冻结：主进程没有响应');
+            return;
+          }
+          // 没有可见的原生表面（空标签、或标签已被 park）：菜单直接画在空舞台上就行，
+          // 不要显示「页面已暂停」这种会让人以为坏了的提示。
+          if (result.frozen === false) {
+            setFrozen(null);
+            diag('冻结：当前没有可见页面，无需冻结');
+            return;
+          }
+          if (typeof result.frame === 'string') {
+            setFrozen(result.frame);
+            diag(`冻结：有帧 ${String(result.frame.length)}`);
+            return;
+          }
+          // 没拿到图（视图还没绘制或截图失败）：舞台给一段说明而不是留白，并把原因记进 shell.log。
+          diag(`冻结：无帧${result.ok === false && typeof result.reason === 'string' ? `（${result.reason}）` : ''}`);
+          setFrozen(FROZEN_NO_FRAME);
+        }).catch((error) => {
+          diag(`冻结失败：${error instanceof Error ? error.message : String(error)}`);
+        });
+        return freezeRun.current;
+      }, [send, diag]);
+
+      const unfreeze = React.useCallback((reason = 'menu') => {
+        freezeReasons.current.delete(reason);
+        if (freezeReasons.current.size > 0) return;
+        freezeRun.current = freezeRun.current.then(() => {
+          if (freezeReasons.current.size > 0) return;
           setFrozen(null);
-          diag('冻结：当前没有可见页面，无需冻结');
-          return;
-        }
-        if (typeof result.frame === 'string') {
-          setFrozen(result.frame);
-          diag(`冻结：有帧 ${String(result.frame.length)}`);
-          return;
-        }
-        // 没拿到图（视图还没绘制或截图失败）：舞台给一段说明而不是留白，并把原因记进 shell.log。
-        diag(`冻结：无帧${result.ok === false && typeof result.reason === 'string' ? `（${result.reason}）` : ''}`);
-        setFrozen(FROZEN_NO_FRAME);
-      };
+          return send({ name: 'unfreeze' });
+        }).catch((error) => {
+          diag(`解冻失败：${error instanceof Error ? error.message : String(error)}`);
+        });
+      }, [send, diag]);
       const closeMenu = (reason = '未标注') => {
         const wasOpen = menu !== '';
         setMenu('');
-        setFrozen(null);
-        void send({ name: 'unfreeze' });
+        unfreeze('menu');
         if (wasOpen) diag(`菜单关闭（${String(reason)}）`);
       };
+
+      // 面板隐藏时宿主会 park 原生视图；把冻结原因清掉，避免下次显示时误以为已经冻结。
+      React.useEffect(() => {
+        if (visible === true) return undefined;
+        freezeReasons.current.clear();
+        setFrozen(null);
+        return undefined;
+      }, [visible]);
+
+      // DSH 自己的模态框是 body 下的 DOM；原生浏览器视图永远盖在 DOM 上，
+      // 所以在弹窗出现期间把浏览器冻成静态图并 park 掉视图。
+      React.useEffect(() => {
+        if (bridge === undefined || visible !== true) return undefined;
+        if (typeof document === 'undefined' || document.body === null || typeof MutationObserver === 'undefined') return undefined;
+        let disposed = false;
+        let modalOpen = false;
+        let scheduled = false;
+        const hasModal = () => document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+        const sync = () => {
+          scheduled = false;
+          if (disposed) return;
+          const next = hasModal();
+          if (next === modalOpen) return;
+          modalOpen = next;
+          if (next) {
+            diag('DSH 弹窗打开：冻结侧栏浏览器');
+            void freeze('modal');
+          } else {
+            diag('DSH 弹窗关闭：恢复侧栏浏览器');
+            unfreeze('modal');
+          }
+        };
+        const schedule = () => {
+          if (scheduled) return;
+          scheduled = true;
+          queueMicrotask(sync);
+        };
+        const observer = new MutationObserver(schedule);
+        observer.observe(document.body, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['role', 'aria-modal'],
+        });
+        sync();
+        return () => {
+          disposed = true;
+          observer.disconnect();
+          if (modalOpen) {
+            modalOpen = false;
+            unfreeze('modal');
+          }
+        };
+      }, [bridge, visible, diag, freeze, unfreeze]);
 
       /** 历史记录：有输入时按输入过滤（地址栏下拉的常见行为），否则全部。 */
       const filterHistory = (entries, query, active) => {
