@@ -190,39 +190,6 @@
       }
     }
 
-    /** Render the live phone-access state: code, address, password and why it is not running. */
-    /** The public section: separate address, separate password, and it can be off while the LAN one is on. */
-    /** Render both halves of phone access from one status answer. */
-    /** Ask main for an action and re-render from the answer it returns. */
-      try {
-        if (pocket && pocket.error) setStatus(pocket.error, true)
-      } catch (error) {
-        setStatus(String(error), true)
-      }
-    }
-
-    /**
-     * The gate in front of the internet.
-     *
-     * Shown every single time, not once and remembered: what it warns about (this computer runs code
-     * for whoever reaches it) does not become less true because the user saw it yesterday.
-     */
-    async function startPublicAccess() {
-      if (mode === 'named' && domain === '') {
-        setStatus('命名隧道要先填公网域名', true)
-        return
-      }
-      const agreed = window.confirm(
-        '开启后，互联网上的任何人只要拿到地址和密码，就能操作你这台电脑上的 DSH，'
-        + '而 DSH 可以读写文件、执行命令。\n\n'
-        + '建议：只在需要时开启，用完立即关闭；不要把这个地址分享给别人。\n\n'
-        + '确定要开启公网访问吗？',
-      )
-      if (!agreed) return
-      // Configuration first, so the start uses what the page shows right now.
-      await save()
-    }
-
     function collect() {
       const close = document.querySelector('input[name="close"]:checked')
       return {
@@ -259,19 +226,6 @@
     } else {
       api.get().then(fill).catch((error) => { setStatus(String(error), true) })
       document.getElementById('save').addEventListener('click', () => { void save() })
-        const value = window.prompt('输入新的访问密码（8–64 位英文字母或数字）')
-        if (value === null) return
-      })
-      })
-        const value = window.prompt('输入固定的公网访问密码（8–64 位英文字母或数字）')
-        if (value === null) return
-      })
-      })
-        radio.addEventListener('change', () => {
-          // Saved, because the mode decides how the next start behaves.
-          void save()
-        })
-      }
       document.getElementById('close').addEventListener('click', () => { void api.close() })
       document.getElementById('restart').addEventListener('click', async () => {
         if (await save()) await api.restart()

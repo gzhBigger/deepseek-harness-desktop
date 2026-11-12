@@ -13,11 +13,23 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { Script } from 'node:vm'
 import { test } from 'node:test'
 
 const page = readFileSync(fileURLToPath(new URL('./settings-ui/index.html', import.meta.url)), 'utf8')
 const script = /<script>([\s\S]*)<\/script>/u.exec(page)?.[1] ?? ''
 const markup = page.slice(0, page.indexOf('<script>'))
+
+test('the inline script compiles, so one syntax error cannot blank the whole page', () => {
+  // A leftover `return` and a stray `}` from the removed phone-access section made V8 discard this
+  // script in its entirety: `api.get()` never ran, every field stayed empty, and the window still
+  // fired `did-finish-load`. That shipped from 0.4.1 through 0.4.23 because nothing compiled the
+  // script. Compiling it here is the cheapest check that runs long before a window exists.
+  assert.doesNotThrow(
+    () => new Script(script, { filename: 'settings-ui/index.html' }),
+    'the settings script must parse; a syntax error leaves the window blank',
+  )
+})
 
 test('the page carries exactly one style block, and it is in the head', () => {
   const styles = page.match(/<style\b/gu) ?? []
