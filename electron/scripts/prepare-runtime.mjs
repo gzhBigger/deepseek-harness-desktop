@@ -245,6 +245,19 @@ const prune = (directory) => {
 }
 const stagedBytes = measure(packagedNodeModules)
 prune(packagedNodeModules)
+/**
+ * 0.2.2 的 office-kit 同时安装原生引擎和 portable WASM 引擎。`resolveEngine()` 在原生引擎
+ * 存在时永远优先用它，WASM 只是没有原生包时的回退；Windows x64 再带 145 MiB 的 WASM 资产
+ * 纯属浪费。只在对应平台的原生包确实存在时删，其他平台仍保留回退。
+ */
+const nativeOfficeEngine = join(packagedNodeModules, '@deepseek-ai', `libreoffice-kit-${targetPlatform}-${targetArch}`)
+const wasmOfficeEngine = join(packagedNodeModules, '@deepseek-ai', 'libreoffice-kit-wasm')
+if (existsSync(nativeOfficeEngine) && existsSync(wasmOfficeEngine)) {
+  removedBytes += measure(wasmOfficeEngine)
+  removedFiles += 1
+  rmSync(wasmOfficeEngine, { recursive: true, force: true })
+  log(`    ✔ 已移除 LibreOffice WASM 回退（${targetPlatform}-${targetArch} 原生引擎在包里）`)
+}
 const prunedBytes = measure(packagedNodeModules)
 log(`==> 裁剪：移除 ${String(removedFiles)} 项 / ${mib(removedBytes)}，${mib(stagedBytes)} → ${mib(prunedBytes)}`)
 
