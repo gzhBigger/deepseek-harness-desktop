@@ -108,13 +108,18 @@ const pluginsManifest = JSON.parse(readFileSync(pluginsManifestPath, 'utf8'))
 if (!Array.isArray(pluginsManifest.packages) || pluginsManifest.packages.length === 0) {
   fail('resources/plugins/plugins.json 没有 packages 清单')
 }
+// The task board is a profile plugin installed from its own repository; shipping it here would
+// shadow the user's editable checkout and freeze it to the app version.
+if (pluginsManifest.packages.includes('dsh-super-kanban')) {
+  fail('dsh-super-kanban 已改为 profile 插件，不能再打包进 resources/plugins')
+}
 for (const plugin of pluginsManifest.packages) {
   const pluginRoot = join(pluginsRoot, plugin)
   const manifestPath = join(pluginRoot, 'package.json')
   if (!existsSync(manifestPath)) fail(`随壳插件 ${String(plugin)} 缺少 package.json`)
   // Read the entry point and the dependency list from the package instead of hardcoding
-  // `index.js` + schemastery: the task board's host half is `index.mjs` and it has no
-  // dependencies at all, so the old fixed list failed a complete package.
+  // `index.js` + schemastery: a plain-ESM plugin may use `index.mjs` and declare no dependencies,
+  // so a fixed list would fail a complete package.
   const pluginManifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
   const entry = typeof pluginManifest.main === 'string' && pluginManifest.main !== '' ? pluginManifest.main : './index.js'
   if (!existsSync(resolve(pluginRoot, entry))) fail(`随壳插件 ${String(plugin)} 缺少入口 ${entry}`)
@@ -429,7 +434,7 @@ async function verifyProfileComposition() {
     const warnings = String(dump.stderr)
     const notFound = warnings.split(/\r?\n/u).filter(line => line.includes('not found'))
     if (notFound.length > 0) throw new Error(`profile 仍有未挂载的 patch 行：${notFound.slice(0, 3).join('；')}`)
-    for (const id of ['git-panel', 'run-env-manager', 'sidebar-width', 'workspace-category-manager', 'win-notify', 'super-kanban', 'mcp-composition_check']) {
+    for (const id of ['git-panel', 'run-env-manager', 'sidebar-width', 'workspace-category-manager', 'win-notify', 'mcp-composition_check']) {
       if (!new RegExp(`id: ${id}\\b`, 'u').test(composed)) throw new Error(`组合结果里没有挂载的 ${id} 行`)
     }
     if (!/name: '?@deepseek-ai\/dsh-mcp-client'?/u.test(composed)) throw new Error('组合结果里没有 MCP 客户端行')

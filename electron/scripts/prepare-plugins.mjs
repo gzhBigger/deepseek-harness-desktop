@@ -5,9 +5,9 @@
  * can rely on them being present. Only the **runtime** half is copied:
  *
  * - the plugin's own runtime files — the manifest's `main` entry (`index.js` for the esbuild-bundled
- *   plugins, `index.mjs` for dsh-super-kanban), `lib/`, `locale/`, `server/` (super-kanban's host
- *   half), plus `src/` because two host halves import it at runtime — and not tests/docs/build
- *   tooling;
+ *   plugins, `index.mjs` for plain-ESM plugins), `lib/`, `locale/`, `server/` (a host half that
+ *   keeps its implementation in modules), plus `src/` because two host halves import it at runtime
+ *   — and not tests/docs/build tooling;
  * - the transitive runtime dependency closure resolved from the plugin's `node_modules/.pnpm`,
  *   flattened into `node_modules/<name>`.
  *
@@ -30,7 +30,7 @@ const destination = resolve(root, '..', 'resources', 'plugins')
 const source = resolve(process.env.DSH_PLUGINS_SOURCE ?? 'D:\\workspace\\research\\deepseek-harness-plugins')
 
 /** Plugins the shell owns. The ONE-WAY usage window and MCP/Skills are shell windows now. */
-const PACKAGES = ['dsh-git-panel', 'dsh-run-env-manager', 'dsh-workspace-category-manager', 'dsh-sidebar-width', 'dsh-win-notify', 'dsh-super-kanban']
+const PACKAGES = ['dsh-git-panel', 'dsh-run-env-manager', 'dsh-workspace-category-manager', 'dsh-sidebar-width', 'dsh-win-notify']
 
 /** Files that are part of a plugin's runtime surface. Everything else is source/build material.
  *
@@ -125,8 +125,8 @@ for (const name of PACKAGES) {
     if (existsSync(join(pluginDir, directory))) await cp(join(pluginDir, directory), join(target, directory), { recursive: true })
   }
   // The entry point comes from the manifest, not a fixed `index.js`: plugins bundled by esbuild ship
-  // `index.js`, while dsh-super-kanban keeps a plain ESM host half at `index.mjs`. The profile
-  // loader resolves `main` from this same manifest, so a mismatch here is invisible until start.
+  // `index.js`, while a plain-ESM plugin keeps its host half at `index.mjs`. The profile loader
+  // resolves `main` from this same manifest, so a mismatch here is invisible until start.
   const manifest = JSON.parse(await readFile(join(pluginDir, 'package.json'), 'utf8'))
   const entry = typeof manifest.main === 'string' && manifest.main !== '' ? manifest.main : './index.js'
   if (!existsSync(resolve(target, entry))) {
@@ -139,9 +139,9 @@ for (const name of PACKAGES) {
   // be imported at all — `ERR_MODULE_NOT_FOUND` only appeared in DSH's startup log long after the
   // installer had shipped, and was masked while the loader rows were not mounted anyway.
   //
-  // The scan covers every copied module, not just the entry point: `dsh-super-kanban` keeps its
-  // host half under `server/`, where `service.mjs` imports a dozen siblings, and only the entry
-  // being importable would still have hidden a missing `server/`.
+  // The scan covers every copied module, not just the entry point: a plugin may keep its host half
+  // under `server/`, where modules import a dozen siblings; checking only the entry would still hide
+  // a missing `server/`.
   const modules = []
   const collectModules = async (current) => {
     for (const item of await readdir(current, { withFileTypes: true })) {

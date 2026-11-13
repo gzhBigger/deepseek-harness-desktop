@@ -75,6 +75,10 @@ Status: implemented
 
 ### 5. 2026-11-13：任务看板 `dsh-super-kanban` 也随壳分发（上游源码 vendored）
 
+> **已被取代（2026-11-13 晚些时候）**：按用户要求，任务看板改为 profile 插件，不再打进
+> `resources/plugins`。本节保留当时“随壳分发”的决策与证据，仅作历史；当前做法见
+> [任务看板改为 profile 插件](./2026-11-13-task-board-as-profile-plugin.md)。
+
 - 背景：用户看中上游 topmindspace/dsh-super-kanban（把 DSH 会话提炼成任务卡的 AI 看板：全局/右侧/悬浮三形态、待验收/待处理、快聊、项目与工作区），
   要求「源码放到我们的 plugin 项目里，以后可以自己改」，并内置进桌面壳，而不是让用户从市场装。
 - 取源：上游 v0.10.0（commit 64cdc88，2026-11-13，MIT）。源码作为独立目录 `dsh-super-kanban/` 进 `deepseek-harness-plugins` 仓库
@@ -136,7 +140,8 @@ Status: implemented
   迁移是幂等的，但**不会**回滚旧插件行——回滚需要用户自己从备份恢复。
 - 已有 profile 里若同名目录是真实目录，壳会改名保留并改用随壳版本；升级插件版本靠壳发版，不再靠市场。
 - MCP 会话 Cookie 从旧 ONE-WAY 行导入 `oneway.json`，旧行删除后不影响重扫码。
-- 随壳插件升级只随壳发版：`dsh-win-notify` 与 `dsh-super-kanban` 都已纳入（见第 4、5 节），不再走市场；
+- 随壳插件升级只随壳发版：`dsh-win-notify` 仍随壳（见第 4 节），不再走市场；
+  任务看板已改为 profile 插件（见第 5 节的取代说明及新笔记），不再随壳。
   `dsh-super-kanban` 是 vendored 的上游源码（插件仓库里的 `dsh-super-kanban/`，含 `UPSTREAM.md`），
   上游后续版本要按该文件里的 `diff -ru --exclude=.git --exclude=.github` 手工同步，不会自动跟随 npm。
 - 手机访问 `pocket-close` 在冒烟里的偶发超时仍未定位到具体服务调用（当前用看门狗兜住，不影响用户）。
