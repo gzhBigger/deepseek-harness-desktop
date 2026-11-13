@@ -49,7 +49,9 @@ pnpm package:dir        # 只产出 win-unpacked 目录（调试用）
 pnpm runtime:prepare    # 单独备随包运行时（安装 → 裁剪 → 自证加载 → 写清单）
 pnpm verify:package     # 校验打包目录里运行时完整（文件数 / 关键文件 / 入口）
 node scripts/smoke.mjs cookie --isolate-home --packaged   # 让打包产物自己跑冒烟
-pnpm release:dry        # 发布演习：签名 + 自校验 + 生成 latest.json，不上传
+pnpm release:dry        # 发布模式演习：打印 gh release 计划，不上传
+pnpm release 0.4.29     # 默认本地打包：构建 + 签名 + 自校验 + 写 latest.json，不上传
+pnpm release:publish 0.4.29 --notes "…" --yes   # 显式发布到 GitHub（更新通道需要）
 ```
 
 ## 环境变量
@@ -117,6 +119,7 @@ pnpm release:dry        # 发布演习：签名 + 自校验 + 生成 latest.json
 
 决议与完整证据见 [docs/update-channel-design.md](../docs/update-channel-design.md)。要点：
 
+- **默认只本地打包，不发布**：`release-electron.mjs` 仍会构建、签名、自校验并写本地 `latest.json`，但不会检查远端 HEAD，也不会调用 `gh`。只有显式加 `--publish` 才会创建 Release 并上传四个资产——也就是说，本地打包不会让已安装客户端收到更新。
 - 信任根沿用现有的 **minisign 密钥对**（私钥 `electron/keys/dsh-desktop.key`（唯一副本另存于 `%USERPROFILE%\.dsh-desktop-keys`），公钥在 `electron/update-key.json`），不采购代码签名证书。
 - **一份 `latest.json`** 同时服务 Tauri 老客户端与 Electron 新客户端。
 - `electron-updater` 在 `app-update.yml` 没有 `publisherName` 时**静默跳过验签**，所以它不能作为完整性依据；安装前必须由本模块的 `src/minisign.ts` 校验落盘字节。
@@ -132,9 +135,9 @@ pnpm minisign:check      # 真实产物往返：真钥签名 → 自校验通过
 手机访问的设计与取舍见 `.agents/notes/implemented/` 下的三篇笔记（网关、公网门、移动布局）。发版相关的部分：
 
 - **Android 客户端随发行版交付**：`release-electron.mjs` 会构建 `gradlew :app:assembleRelease`、用 `aapt2`
-  读包名/版本/minSdk、用 `apksigner` 确认 v2 签名，然后以**固定资产名** `DSH.Pocket.apk` 上传。固定名字是为了
-  `https://github.com/<repo>/releases/latest/download/DSH.Pocket.apk` 永远指向最新版——设置页把它做成二维码，
-  手机扫码就能装。
+  读包名/版本/minSdk、用 `apksigner` 确认 v2 签名，然后以**固定资产名** `DSH.Pocket.apk` 输出；只有 `--publish`
+  才会把它上传。固定名字是为了 `https://github.com/<repo>/releases/latest/download/DSH.Pocket.apk` 永远指向
+  最新版——设置页把它做成二维码，手机扫码就能装。
 - **`latest.json` 多了一个 `apk` 段**（包名、版本、minSdk/targetSdk、固定 URL、sha256）。这是附加字段：
   `fetchManifest` 只读它认识的键，老客户端不受影响。
 - **配置入口**：标题栏「手机访问」菜单（`应用`/`插件` 旁边）——菜单里能看状态、开关局域网访问、关闭公网访问、复制两种地址；「打开手机访问设置…」打开的是一个独立窗口（`src/pocket-ui/`，复用设置窗口的桥），里面局域网与公网分区，默认显示同一 WiFi 的连接二维码（可刷新），手机 App 的下载二维码收在按钮后面。设置窗口不再承载手机访问，只留一句指引。
@@ -171,7 +174,7 @@ electron/
     smoke.mjs           端到端冒烟运行器（支持 --packaged）
     smoke-pocket.mjs    手机访问网关冒烟（真实 socket，含 Host 403 与 WebSocket 升级）
     prepare-cloudflared.mjs 取回并校验随包隧道二进制（版本 + 哈希 + 签名）
-    release-electron.mjs 发布脚本（含 Android 客户端构建与 smoke 闸门）
+    release-electron.mjs 本地打包脚本（默认不上传；--publish 才发 Release）
     installer-bridge.nsh NSIS 桥接宏
     minisign-roundtrip.mjs 签名往返验证
   electron-builder.config.mjs 打包配置

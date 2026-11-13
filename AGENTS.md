@@ -12,6 +12,7 @@
 | 文档 | `docs/tauri-to-electron-migration.md`、`electron/README.md` | 本文件第 2–5 节 |
 | dsh 运行时 | **随包**（`resources/runtime/dsh`，见 `docs/electron-runtime-bundling.md`） | 依赖机器上已装的 `dsh` |
 
+- **Electron 发版默认只本地打包**：`electron/scripts/release-electron.mjs <version>` 构建、签名、自校验并写本地 `latest.json`，不访问 GitHub；只有显式 `--publish` 才创建 Release 并上传资产。因此本地打包不会让已安装客户端收到更新。
 - **为什么还留着 Tauri 壳**：已安装的旧版要靠它自己的更新器完成迁移（旧版检查更新 → 下载 Electron 安装包 → 静默安装 → 启动新版 → 新版提示卸载旧版）。它同时是面板插件资源的所在（`src-tauri/resources/dsh-desktop-shell/`，两个壳共用），所以**在旧版退役前不要删 `src-tauri/`**，也不要移动该插件目录。
 - **改动要落在正确的壳上**：用户可见的功能改 `electron/`；`src-tauri/` 只做维持旧版能跑完迁移的最小改动。
 - **本文件第 2–5 节描述的是旧版 Tauri 壳的规范**，其中「三处版本同步」「`scripts/release.sh`」等规则**不适用于 Electron 壳**；Electron 壳的规范在 `electron/README.md` 的「本项目特有的坑」一节。

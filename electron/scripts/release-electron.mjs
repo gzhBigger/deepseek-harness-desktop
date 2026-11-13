@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 /**
- * Electron-shell release: build → sign with the existing minisign key → verify the
- * signature ourselves → write `latest.json` → publish.
+ * Electron-shell packaging: build → sign with the existing minisign key → verify the
+ * signature ourselves → write `latest.json`.
+ *
+ * **Default: local packaging only.** Nothing is sent to GitHub. Use `--publish` to
+ * upload the installer, signature, manifest and APK explicitly; that upload is what
+ * keeps installed clients' auto-update working.
  *
  * The same NSIS bytes serve two audiences:
  * - existing Electron installs, which read `latest.json` and verify with minisign;
@@ -10,14 +14,14 @@
  *   `scripts/installer-bridge.nsh` translates into a silent install).
  *
  * Safety rails:
- * - `--dry-run` builds, signs and writes the manifest, but publishes nothing;
+ * - `--publish` is the only path that uploads; `--dry-run` prints the publish plan;
  * - a non-prerelease publish requires `--yes`, because it makes every installed Tauri
  *   client migrate on its next check, and a published version can never be reused.
  *
  * Usage:
- *   node scripts/release-electron.mjs 0.3.0 --notes "..." --dry-run
- *   node scripts/release-electron.mjs 0.3.0 --notes "..." --prerelease
- *   node scripts/release-electron.mjs 0.3.0 --notes "..." --yes
+ *   node scripts/release-electron.mjs 0.4.29 --skip-smoke
+ *   node scripts/release-electron.mjs 0.4.29 --publish --notes "..." --yes
+ *   node scripts/release-electron.mjs 0.4.29 --publish --notes "..." --dry-run
  */
 
 import { execFileSync } from 'node:child_process'
@@ -34,6 +38,7 @@ const REPO = 'gzhBigger/deepseek-harness-desktop'
 
 const args = process.argv.slice(2)
 const version = args.find(argument => !argument.startsWith('--') && /^\d+\.\d+\.\d+/u.test(argument))
+const publish = args.includes('--publish')
 const dryRun = args.includes('--dry-run')
 const prerelease = args.includes('--prerelease')
 const confirmed = args.includes('--yes')
@@ -66,11 +71,14 @@ function builderEnvironment() {
   return { ...process.env, [key]: kept.join(pathDelimiter) }
 }
 
-if (version === undefined) fail('用法：release-electron.mjs <version> --notes "…" [--dry-run|--prerelease|--yes]')
-if (notes === undefined || notes.trim() === '') {
-  fail('必须提供 --notes：每次发布都要有用户可见的改动说明（禁止空说明发布）')
+if (version === undefined) fail('用法：release-electron.mjs <version> [--skip-build|--skip-smoke] [--publish [--notes "…"] [--prerelease] [--yes]]')
+if (publish && (notes === undefined || notes.trim() === '')) {
+  fail('--publish 必须提供 --notes：每次发布都要有用户可见的改动说明（禁止空说明发布）')
 }
-if (!dryRun && !prerelease && !confirmed) {
+if (!publish && !dryRun && prerelease) {
+  fail('--prerelease 只能和 --publish 或 --dry-run 一起用')
+}
+if (publish && !dryRun && !prerelease && !confirmed) {
   fail('非预发布发布会立刻让所有已安装的 Tauri 客户端在下次检查时迁移到 Electron 版，且版本号不可复用。确认无误请追加 --yes')
 }
 
@@ -343,8 +351,24 @@ const manifestPath = join(outputDir, 'latest.json')
 writeFileSync(manifestPath, `${JSON.stringify(manifestJson, null, 2)}\n`, 'utf8')
 process.stdout.write(`==> latest.json 已生成：${manifestPath}\n`)
 
-process.stdout.write('==> 检查 HEAD 是否已推送\n')
-assertHeadIsPushed()
+if (publish || dryRun) {
+  process.stdout.write('==> 检查 HEAD 是否已推送\n')
+  assertHeadIsPushed()
+}
+
+if (!publish && !dryRun) {
+  process.stdout.write([
+    '',
+    `✅ 本地打包完成（未上传 GitHub）`,
+    `   安装包: ${artifactPath}`,
+    `   签名:   ${signaturePath}`,
+    `   清单:   ${manifestPath}（本地参考，未发布）`,
+    `   APK:    ${apkPath}`,
+    `   已安装客户端不会看到这个版本；需要发布时显式加 --publish。`,
+    '',
+  ].join('\n'))
+  process.exit(0)
+}
 
 if (dryRun) {
   process.stdout.write('\n发布计划（--dry-run，未上传）：\n')

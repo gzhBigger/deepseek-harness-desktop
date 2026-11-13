@@ -17,6 +17,8 @@ Status: implemented
 - 检查放在 `--dry-run` 之前，所以试跑也能暴露这个问题，而不必等到真正上传；
 - `git fetch` 失败、或仓库没有 upstream 时**只打印一行跳过**，不阻塞（离线试跑仍然可用，代价是退回到人工确认）。
 
+2026-11-13 起默认只做本地打包，不执行这项检查；只有显式 `--publish`（以及 `--dry-run` 发布演习）才走上传路径。见 [默认只本地打包](2026-11-13-local-packaging-default.md)。
+
 ## Alternatives considered
 
 - **给 `gh release create` 加 `--target <本地 SHA>`**（最强理由：一行改动，直接让 tag 指到构建用的那个提交）。放弃原因：目标提交必须已存在于 GitHub，未推送时 `gh` 会报错——看起来也挡住了，但错的是"报错位置在最后一步"：构建、签名、APK、smoke、打包校验全跑完才失败，且失败信息是 GitHub 的 HTTP 错误，不是"你忘了 push"。前置检查更早、信息更准，两者也不冲突。
