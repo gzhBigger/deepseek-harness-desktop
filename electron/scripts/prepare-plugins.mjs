@@ -29,8 +29,14 @@ const root = dirname(fileURLToPath(import.meta.url))
 const destination = resolve(root, '..', 'resources', 'plugins')
 const source = resolve(process.env.DSH_PLUGINS_SOURCE ?? 'D:\\workspace\\research\\deepseek-harness-plugins')
 
-/** Plugins the shell owns. The ONE-WAY usage window and MCP/Skills are shell windows now. */
-const PACKAGES = ['dsh-git-panel', 'dsh-run-env-manager', 'dsh-workspace-category-manager', 'dsh-sidebar-width', 'dsh-win-notify']
+/**
+ * Plugins the shell owns. The ONE-WAY usage window and MCP/Skills are shell windows; the four
+ * panels (git / run-env / workspace-category / sidebar-width) are **profile plugins** now — the
+ * user's profile declares them as `link:` dependencies and DSH mounts them from the plugin repo.
+ * They must never be copied into the package; `verify-package.mjs` fails the build if one of them
+ * reappears in `plugins.json`.
+ */
+const PACKAGES = ['dsh-win-notify']
 
 /** Files that are part of a plugin's runtime surface. Everything else is source/build material.
  *

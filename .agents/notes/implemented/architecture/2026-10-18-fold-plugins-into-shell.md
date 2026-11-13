@@ -41,6 +41,10 @@ Status: implemented
 
 ### 3. 四个面板插件随壳注入（0.4.6）
 
+> **已被取代（2026-11-13）**：按用户要求，这四个面板改为 profile 插件，不再打进
+> `resources/plugins`。本节保留当时“随壳注入”的决策与证据，仅作历史；当前做法见
+> [四个面板改为 profile 插件](./2026-11-13-four-panels-as-profile-plugins.md)。
+
 - `scripts/prepare-plugins.mjs` 只复制运行时文件 + 依赖闭包：**300 文件 / 2.38 MiB**（0.4.6 起含
   host 半区运行时 import 的 `src/`；此前漏掉它，git 面板与运行环境两个插件打包后 `ERR_MODULE_NOT_FOUND`），
   而整目录复制是 109 MB（jsdom/esbuild/react/typescript 全是构建期依赖）。产物 `resources/plugins` 不入库；

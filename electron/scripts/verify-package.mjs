@@ -113,6 +113,13 @@ if (!Array.isArray(pluginsManifest.packages) || pluginsManifest.packages.length 
 if (pluginsManifest.packages.includes('dsh-super-kanban')) {
   fail('dsh-super-kanban 已改为 profile 插件，不能再打包进 resources/plugins')
 }
+// Same rule for the four panels: they live in the user's profile as `link:` dependencies so the
+// user can edit and upgrade them independently of the shell's release cadence.
+for (const retired of ['dsh-git-panel', 'dsh-run-env-manager', 'dsh-workspace-category-manager', 'dsh-sidebar-width']) {
+  if (pluginsManifest.packages.includes(retired)) {
+    fail(`${retired} 已改为 profile 插件，不能再打包进 resources/plugins`)
+  }
+}
 for (const plugin of pluginsManifest.packages) {
   const pluginRoot = join(pluginsRoot, plugin)
   const manifestPath = join(pluginRoot, 'package.json')
@@ -325,10 +332,10 @@ function freePort() {
  * packaged shell on a throwaway home (the first-install path) that already contains one MCP row in
  * the old broken spelling, then asks the same packaged dsh to compose the result:
  *
- *  - the shell must link the four shipped packages into the profile and register them in
- *    `dsh.profile.bundles` (what actually mounts them);
+ *  - the shell must link the shipped package into the profile and register it in
+ *    `dsh.profile.bundles` (what actually mounts it);
  *  - the old MCP row must be repaired into an `insert` container and compose without warnings;
- *  - the user's existing plugin config (`sidebarWidth`) must still apply to the mounted row.
+ *  - the user's plugin config override (`notifyKinds`) must still apply to the mounted row.
  *
  * A profile is the one place a packaged build can still lose this silently, so it is checked on the
  * artifact that is about to be signed, not in a unit test.
@@ -356,11 +363,10 @@ async function verifyProfileComposition() {
       '    transport: streamable-http',
       '    url: http://127.0.0.1:9/mcp',
       '',
-      '- id: sidebar-width',
-      '  name: dsh-sidebar-width',
+      '- id: win-notify',
+      '  name: dsh-win-notify',
       '  config:',
-      '    sidebarWidth: 301',
-      '    rightbarWidth: 300',
+      '    notifyKinds: [completed]',
       '',
     ].join('\n'), 'utf8')
 
@@ -434,11 +440,11 @@ async function verifyProfileComposition() {
     const warnings = String(dump.stderr)
     const notFound = warnings.split(/\r?\n/u).filter(line => line.includes('not found'))
     if (notFound.length > 0) throw new Error(`profile 仍有未挂载的 patch 行：${notFound.slice(0, 3).join('；')}`)
-    for (const id of ['git-panel', 'run-env-manager', 'sidebar-width', 'workspace-category-manager', 'win-notify', 'mcp-composition_check']) {
+    for (const id of ['win-notify', 'mcp-composition_check']) {
       if (!new RegExp(`id: ${id}\\b`, 'u').test(composed)) throw new Error(`组合结果里没有挂载的 ${id} 行`)
     }
     if (!/name: '?@deepseek-ai\/dsh-mcp-client'?/u.test(composed)) throw new Error('组合结果里没有 MCP 客户端行')
-    if (!/sidebarWidth: 301/u.test(composed)) throw new Error('用户补丁里的插件配置没有作用到挂载行（sidebarWidth: 301）')
+    if (!/notifyKinds:\s*\n\s*- completed/u.test(composed)) throw new Error('用户补丁里的插件配置没有作用到挂载行（notifyKinds: [completed]）')
     process.stdout.write(`==> 组合校验：${pluginsManifest.packages.length} 个随壳插件与 MCP 行在打包 dsh 里真实挂载，用户配置生效\n`)
   } finally {
     rmSync(tempRoot, { recursive: true, force: true })
