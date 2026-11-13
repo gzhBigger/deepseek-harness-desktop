@@ -109,11 +109,19 @@ if (!Array.isArray(pluginsManifest.packages) || pluginsManifest.packages.length 
   fail('resources/plugins/plugins.json 没有 packages 清单')
 }
 for (const plugin of pluginsManifest.packages) {
-  for (const file of ['package.json', 'index.js']) {
-    if (!existsSync(join(pluginsRoot, plugin, file))) fail(`随壳插件 ${String(plugin)} 缺少 ${file}`)
+  const pluginRoot = join(pluginsRoot, plugin)
+  const manifestPath = join(pluginRoot, 'package.json')
+  if (!existsSync(manifestPath)) fail(`随壳插件 ${String(plugin)} 缺少 package.json`)
+  // Read the entry point and the dependency list from the package instead of hardcoding
+  // `index.js` + schemastery: the task board's host half is `index.mjs` and it has no
+  // dependencies at all, so the old fixed list failed a complete package.
+  const pluginManifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  const entry = typeof pluginManifest.main === 'string' && pluginManifest.main !== '' ? pluginManifest.main : './index.js'
+  if (!existsSync(resolve(pluginRoot, entry))) fail(`随壳插件 ${String(plugin)} 缺少入口 ${entry}`)
+  for (const dependency of Object.keys(pluginManifest.dependencies ?? {})) {
+    const linkTarget = join(pluginRoot, 'node_modules', dependency, 'package.json')
+    if (!existsSync(linkTarget)) fail(`随壳插件 ${String(plugin)} 缺少运行时依赖 ${dependency}`)
   }
-  const linkTarget = join(pluginsRoot, plugin, 'node_modules', '@deepseek-ai', 'schemastery', 'package.json')
-  if (!existsSync(linkTarget)) fail(`随壳插件 ${String(plugin)} 缺少运行时依赖 @deepseek-ai/schemastery`)
 }
 
 // `dist/main.js` is checked through the IPC channel names rather than the menu label: esbuild emits

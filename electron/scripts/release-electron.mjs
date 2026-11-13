@@ -138,8 +138,18 @@ if (!Array.isArray(pluginsManifest.packages) || pluginsManifest.packages.length 
   fail('resources/plugins/plugins.json 没有 packages 清单：重新运行 `pnpm plugins:prepare`')
 }
 for (const plugin of pluginsManifest.packages) {
-  if (!existsSync(join(root, 'resources', 'plugins', plugin, 'index.js'))) {
-    fail(`随壳插件 ${String(plugin)} 不完整（缺少 index.js）：重新运行 \`pnpm plugins:prepare\``)
+  // The entry point comes from the package itself: most of the bundled plugins use
+  // `index.js`, but the task board ships an ESM host half (`index.mjs`). Hardcoding the
+  // name here once meant a missing index.js for a perfectly valid package.
+  const pluginRoot = join(root, 'resources', 'plugins', plugin)
+  const manifestPath = join(pluginRoot, 'package.json')
+  if (!existsSync(manifestPath)) {
+    fail(`随壳插件 ${String(plugin)} 不完整（缺少 package.json）：重新运行 \`pnpm plugins:prepare\``)
+  }
+  const pluginManifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  const entry = typeof pluginManifest.main === 'string' && pluginManifest.main !== '' ? pluginManifest.main : './index.js'
+  if (!existsSync(join(pluginRoot, entry))) {
+    fail(`随壳插件 ${String(plugin)} 不完整（缺少入口 ${entry}）：重新运行 \`pnpm plugins:prepare\``)
   }
 }
 process.stdout.write(`==> 随壳插件 ${pluginsManifest.packages.length} 个（${pluginsManifest.packages.join(', ')}）\n`)
