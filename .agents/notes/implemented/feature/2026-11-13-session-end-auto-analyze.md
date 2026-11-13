@@ -23,6 +23,7 @@ Super Kanban 删除了后台扫描后，任务状态只会由用户手动拖动/
 - `updateTaskFromAnalysis` 在 `auto` 模式下只锁手写字段 `title`/`goal`/`priority`/`tags`，允许 `status`/`progress` 更新；已完成/归档任务在调度前就已跳过。
 - 设置新增 `autoAnalyzeOnTurnEnd`，默认 `true`；设置页「AI」区提供开关，文案说明「已完成任务不自动重开」。
 - `stop()` 清理所有待执行的计时器，避免插件卸载后回调仍在跑。
+- 新任务固定创建为 `backlog`（弹窗不再让用户选状态）；`ContinueTaskModal` 只在草稿真正放入关联/新会话后调用 `task.update` 置 `in_progress`，且不写 `lockedFields`，后续自动研判仍可继续改状态。
 
 ## Alternatives considered
 
@@ -42,8 +43,9 @@ Super Kanban 删除了后台扫描后，任务状态只会由用户手动拖动/
 ## Verification
 
 - `node --check client.js server/service.mjs server/store.mjs` 通过。
-- `npm test` 314 tests / 314 pass。
-- 新增 `tests/service.test.mjs` 用例：`turn/end` 后自动研判关联任务，手写标题保持不变，状态从 `backlog` 更新，AI 降级为 `rules`。
+- `npm test` 316 tests / 316 pass。
+- 新增 `tests/service.test.mjs` 用例：`turn/end` 后自动研判关联任务，手写标题保持不变，状态从 `backlog` 更新，AI 降级为 `rules`；`task.create` 默认 `backlog`，置 `in_progress` 后 `lockedFields` 不含 status。
+- `tests/client.test.mjs` 断言新建任务弹窗不再有状态选择器，且 `task.create` 固定 `status:"backlog"`。
 - `tests/store.test.mjs` 覆盖 `autoAnalyzeOnTurnEnd:false` 与默认 `true`；`tests/ai-models.test.mjs` 覆盖 `session/event` 订阅与停止释放。
 - `npm run validate`、`check:privacy`、`check:docs`、`check:version` 全部通过。
 - 插件仓库提交 `4eb3bf0 feat(super-kanban): auto re-judge linked tasks after a turn`（10 files，+113/−11）。
