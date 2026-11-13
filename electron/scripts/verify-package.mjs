@@ -374,7 +374,7 @@ async function verifyProfileComposition() {
     const smoke = JSON.parse(readFileSync(resultPath, 'utf8'))
     if (smoke.ok !== true) throw new Error(`打包壳冒烟失败（${String(smoke.stage ?? 'unknown')}：${String(smoke.message ?? '')}）`)
     const shellLog = readFileSync(join(userData, 'shell.log'), 'utf8')
-    if (!shellLog.includes('已把 4 个插件登记进 profile 的 bundle 列表')) {
+    if (!shellLog.includes(`已把 ${pluginsManifest.packages.length} 个插件登记进 profile 的 bundle 列表`)) {
       throw new Error('随壳插件没有登记进 profile 的 dsh.profile.bundles（shell.log 里没有登记日志）')
     }
     // Mounting is not enough: the packaged copy has to be importable by its own entry point. A
@@ -421,12 +421,12 @@ async function verifyProfileComposition() {
     const warnings = String(dump.stderr)
     const notFound = warnings.split(/\r?\n/u).filter(line => line.includes('not found'))
     if (notFound.length > 0) throw new Error(`profile 仍有未挂载的 patch 行：${notFound.slice(0, 3).join('；')}`)
-    for (const id of ['git-panel', 'run-env-manager', 'sidebar-width', 'workspace-category-manager', 'mcp-composition_check']) {
+    for (const id of ['git-panel', 'run-env-manager', 'sidebar-width', 'workspace-category-manager', 'win-notify', 'mcp-composition_check']) {
       if (!new RegExp(`id: ${id}\\b`, 'u').test(composed)) throw new Error(`组合结果里没有挂载的 ${id} 行`)
     }
     if (!/name: '?@deepseek-ai\/dsh-mcp-client'?/u.test(composed)) throw new Error('组合结果里没有 MCP 客户端行')
     if (!/sidebarWidth: 301/u.test(composed)) throw new Error('用户补丁里的插件配置没有作用到挂载行（sidebarWidth: 301）')
-    process.stdout.write('==> 组合校验：4 个随壳插件与 MCP 行在打包 dsh 里真实挂载，用户配置生效\n')
+    process.stdout.write(`==> 组合校验：${pluginsManifest.packages.length} 个随壳插件与 MCP 行在打包 dsh 里真实挂载，用户配置生效\n`)
   } finally {
     rmSync(tempRoot, { recursive: true, force: true })
   }

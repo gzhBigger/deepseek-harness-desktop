@@ -39,7 +39,7 @@ Status: implemented
 - Skills 走 `$DSH_HOME/skills`（bundle / 单文件 / junction 链接），壳只删除自己创建的链接。
 - 入口放「插件」菜单 →「MCP 与 Skills…」，保存后提示并可直接重启 DSH。
 
-### 3. 四个插件随壳注入
+### 3. 四个面板插件随壳注入（0.4.6）
 
 - `scripts/prepare-plugins.mjs` 只复制运行时文件 + 依赖闭包：**300 文件 / 2.38 MiB**（0.4.6 起含
   host 半区运行时 import 的 `src/`；此前漏掉它，git 面板与运行环境两个插件打包后 `ERR_MODULE_NOT_FOUND`），
@@ -57,6 +57,21 @@ Status: implemented
   `verify-package.mjs` 与发版预检校验清单、入口和 schemastery 依赖，0.4.6 起还会用打包壳在干净 home 上
   真跑一次冒烟 + `dsh --dump-config`，断言插件包已登记/挂载、MCP 行在 insert 内、启动日志无
   `did not activate`（见 [修复笔记](../bug-fix/2026-10-19-shell-plugin-rows-never-mounted.md)）。
+
+### 4. 2026-11-13：会话通知插件也随壳分发
+
+- 背景：用户的 `dsh-win-notify` 包还在 `node_modules`，但不在 profile 的依赖与 `dsh.profile.bundles`
+  里，DSH 从未加载它，会话结束/人工干预通知静默消失；插件自身测试 25/25（宿主）与 36/36（客户端）全过。
+- 决定：把它作为第五个随壳插件，和四个面板插件同一条链路分发；不再让用户手动登记本地 `link:`，
+  避免插件仓库路径变化后再次静默失效。
+- 实现：`prepare-plugins.mjs` 的 `PACKAGES` 增加 `dsh-win-notify`；`KEEP_FILES` 增加根级
+  `client.js`——这个插件的客户端半区没有打进 `lib/client.js`，漏掉它会让宿主半区加载而客户端观察器不挂载。
+  `verify-package.mjs` 的组合门禁改为按 `plugins.json` 的实际数量断言登记日志，并断言 `win-notify`
+  行真实挂载。
+- 证据：`plugins:prepare` 为 5 个插件 / 349 文件 / 2.67 MiB；dev 壳启动日志出现
+  `随壳插件：已链接 1 个（dsh-win-notify）到 profile` 与 `[dsh-win-notify] 客户端侧已启用`；
+  `/dsh-win-notify/config` 返回 200；实际跑一轮会话后 shell 日志出现
+  `系统通知：DSH 会话通知 —— 「只回复 OK」已执行完成`。桌面全量 665 测试 / 0 失败。
 
 ## Alternatives considered
 

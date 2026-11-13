@@ -28,7 +28,7 @@ const destination = resolve(root, '..', 'resources', 'plugins')
 const source = resolve(process.env.DSH_PLUGINS_SOURCE ?? 'D:\\workspace\\research\\deepseek-harness-plugins')
 
 /** Plugins the shell owns. The ONE-WAY usage window and MCP/Skills are shell windows now. */
-const PACKAGES = ['dsh-git-panel', 'dsh-run-env-manager', 'dsh-workspace-category-manager', 'dsh-sidebar-width']
+const PACKAGES = ['dsh-git-panel', 'dsh-run-env-manager', 'dsh-workspace-category-manager', 'dsh-sidebar-width', 'dsh-win-notify']
 
 /** Files that are part of a plugin's runtime surface. Everything else is source/build material.
  *
@@ -36,8 +36,12 @@ const PACKAGES = ['dsh-git-panel', 'dsh-run-env-manager', 'dsh-workspace-categor
  * (`index.js` → `./src/host/routes.js` …): dropping it packaged a plugin whose entry point cannot
  * even be imported (`ERR_MODULE_NOT_FOUND`), which stayed invisible while the rows were not
  * mounted at all. It is small (~0.5 MiB for the two). The client half is still bundled by esbuild
- * into `lib/client.js`, so nothing else under `src/` needs a build step here. */
-const KEEP_FILES = ['package.json', 'index.js', 'cordis.patch.yml']
+ * into `lib/client.js`, so nothing else under `src/` needs a build step here.
+ *
+ * `client.js` is included for plugins whose client half is not bundled into `lib/` (the
+ * notification plugin keeps its hand-written `client.js` at the package root). Dropping it would
+ * package a plugin whose host half loads but whose session watcher never mounts. */
+const KEEP_FILES = ['package.json', 'index.js', 'client.js', 'cordis.patch.yml']
 const KEEP_DIRECTORIES = ['lib', 'locale', 'skills', 'assets', 'src']
 
 if (!existsSync(source)) {
