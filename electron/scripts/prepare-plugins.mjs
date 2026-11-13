@@ -4,8 +4,10 @@
  * The shell injects these instead of having the user install them from the market, so every start
  * can rely on them being present. Only the **runtime** half is copied:
  *
- * - the plugin's own runtime files (`index.js`, `lib/`, `locale/`), plus `src/` because two host
- *   halves import it at runtime, and not tests/docs/build tooling;
+ * - the plugin's own runtime files — the manifest's `main` entry (`index.js` for the esbuild-bundled
+ *   plugins, `index.mjs` for dsh-super-kanban), `lib/`, `locale/`, `server/` (super-kanban's host
+ *   half), plus `src/` because two host halves import it at runtime — and not tests/docs/build
+ *   tooling;
  * - the transitive runtime dependency closure resolved from the plugin's `node_modules/.pnpm`,
  *   flattened into `node_modules/<name>`.
  *
@@ -13,9 +15,9 @@
  * esbuild, react, typescript are build-time only. The actual closure is schemastery + cosmokit +
  * @standard-schema/spec — a fraction of a megabyte per plugin.
  *
- * The copy is validated against the entry point's relative imports before the build continues: a
- * packaged plugin that cannot be imported mounts, warns `entries did not activate`, and leaves the
- * user without the panel just as if it had never been injected.
+ * The copy is validated against every copied module's relative imports before the build continues:
+ * a packaged plugin that cannot be imported mounts, warns `entries did not activate`, and leaves
+ * the user without the panel just as if it had never been injected.
  */
 
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -28,7 +30,7 @@ const destination = resolve(root, '..', 'resources', 'plugins')
 const source = resolve(process.env.DSH_PLUGINS_SOURCE ?? 'D:\\workspace\\research\\deepseek-harness-plugins')
 
 /** Plugins the shell owns. The ONE-WAY usage window and MCP/Skills are shell windows now. */
-const PACKAGES = ['dsh-git-panel', 'dsh-run-env-manager', 'dsh-workspace-category-manager', 'dsh-sidebar-width', 'dsh-win-notify']
+const PACKAGES = ['dsh-git-panel', 'dsh-run-env-manager', 'dsh-workspace-category-manager', 'dsh-sidebar-width', 'dsh-win-notify', 'dsh-super-kanban']
 
 /** Files that are part of a plugin's runtime surface. Everything else is source/build material.
  *
@@ -41,8 +43,8 @@ const PACKAGES = ['dsh-git-panel', 'dsh-run-env-manager', 'dsh-workspace-categor
  * `client.js` is included for plugins whose client half is not bundled into `lib/` (the
  * notification plugin keeps its hand-written `client.js` at the package root). Dropping it would
  * package a plugin whose host half loads but whose session watcher never mounts. */
-const KEEP_FILES = ['package.json', 'index.js', 'client.js', 'cordis.patch.yml']
-const KEEP_DIRECTORIES = ['lib', 'locale', 'skills', 'assets', 'src']
+const KEEP_FILES = ['package.json', 'index.js', 'index.mjs', 'client.js', 'cordis.patch.yml']
+const KEEP_DIRECTORIES = ['lib', 'locale', 'skills', 'assets', 'src', 'server']
 
 if (!existsSync(source)) {
   console.error(`[plugins] 找不到插件源码目录：${source}（可用 DSH_PLUGINS_SOURCE 覆盖）`)
@@ -122,21 +124,46 @@ for (const name of PACKAGES) {
   for (const directory of KEEP_DIRECTORIES) {
     if (existsSync(join(pluginDir, directory))) await cp(join(pluginDir, directory), join(target, directory), { recursive: true })
   }
-  if (!existsSync(join(target, 'index.js'))) {
-    console.error(`[plugins] ${name}: 没有 index.js，源码目录不完整`)
+  // The entry point comes from the manifest, not a fixed `index.js`: plugins bundled by esbuild ship
+  // `index.js`, while dsh-super-kanban keeps a plain ESM host half at `index.mjs`. The profile
+  // loader resolves `main` from this same manifest, so a mismatch here is invisible until start.
+  const manifest = JSON.parse(await readFile(join(pluginDir, 'package.json'), 'utf8'))
+  const entry = typeof manifest.main === 'string' && manifest.main !== '' ? manifest.main : './index.js'
+  if (!existsSync(resolve(target, entry))) {
+    console.error(`[plugins] ${name}: 复制后缺少入口 ${entry}（检查 KEEP_FILES），源码目录不完整`)
     process.exit(1)
   }
 
-  // Fail the build when the copied runtime surface cannot satisfy the entry point's relative
-  // imports. A missing top-level directory (`src/` is exactly what happened) packaged a plugin that
-  // could not be imported at all — `ERR_MODULE_NOT_FOUND` only appeared in DSH's startup log long
-  // after the installer had shipped, and was masked while the loader rows were not mounted anyway.
-  const entrySource = await readFile(join(target, 'index.js'), 'utf8')
-  for (const match of entrySource.matchAll(/\bfrom\s+['"](\.[^'"]+)['"]/gu)) {
-    const specifier = match[1]
-    if (!existsSync(resolve(target, specifier))) {
-      console.error(`[plugins] ${name}: index.js 引入了 ${specifier}，但复制后的目录里没有它（检查 KEEP_FILES/KEEP_DIRECTORIES）`)
-      process.exit(1)
+  // Fail the build when the copied runtime surface cannot satisfy its own relative imports. A
+  // missing top-level directory (`src/` is exactly what happened) packaged a plugin that could not
+  // be imported at all — `ERR_MODULE_NOT_FOUND` only appeared in DSH's startup log long after the
+  // installer had shipped, and was masked while the loader rows were not mounted anyway.
+  //
+  // The scan covers every copied module, not just the entry point: `dsh-super-kanban` keeps its
+  // host half under `server/`, where `service.mjs` imports a dozen siblings, and only the entry
+  // being importable would still have hidden a missing `server/`.
+  const modules = []
+  const collectModules = async (current) => {
+    for (const item of await readdir(current, { withFileTypes: true })) {
+      const path = join(current, item.name)
+      if (item.isDirectory()) await collectModules(path)
+      else if (/\.(?:m?js|cjs)$/u.test(item.name)) modules.push(path)
+    }
+  }
+  await collectModules(target)
+  for (const modulePath of modules) {
+    const moduleSource = await readFile(modulePath, 'utf8')
+    // Line-anchored matching misses multi-line import lists (`import {\n  …\n} from "./store.mjs"`),
+    // which is most of `server/service.mjs`; matching every `from '…'` instead picks up code samples
+    // inside string literals. So match anywhere, then keep only specifiers that look like a relative
+    // path — the garbage matches contain spaces, quotes and parentheses.
+    for (const match of moduleSource.matchAll(/\bfrom\s*['"](\.[^'"]+)['"]|\bimport\s*\(\s*['"](\.[^'"]+)['"]/gu)) {
+      const specifier = match[1] ?? match[2]
+      if (!/^\.\.?\/[\w.@\-/]+$/u.test(specifier)) continue
+      if (!existsSync(resolve(dirname(modulePath), specifier))) {
+        console.error(`[plugins] ${name}: ${relative(target, modulePath)} 引入了 ${specifier}，但复制后的目录里没有它（检查 KEEP_FILES/KEEP_DIRECTORIES）`)
+        process.exit(1)
+      }
     }
   }
 

@@ -73,6 +73,30 @@ Status: implemented
   `/dsh-win-notify/config` 返回 200；实际跑一轮会话后 shell 日志出现
   `系统通知：DSH 会话通知 —— 「只回复 OK」已执行完成`。桌面全量 665 测试 / 0 失败。
 
+### 5. 2026-11-13：任务看板 `dsh-super-kanban` 也随壳分发（上游源码 vendored）
+
+- 背景：用户看中上游 topmindspace/dsh-super-kanban（把 DSH 会话提炼成任务卡的 AI 看板：全局/右侧/悬浮三形态、待验收/待处理、快聊、项目与工作区），
+  要求「源码放到我们的 plugin 项目里，以后可以自己改」，并内置进桌面壳，而不是让用户从市场装。
+- 取源：上游 v0.10.0（commit 64cdc88，2026-11-13，MIT）。源码作为独立目录 `dsh-super-kanban/` 进 `deepseek-harness-plugins` 仓库
+  （同仓库的其它插件目录并列），排除 `.git` 与 `.github/`（后者含会往 npm 发布的 CI/release 工作流）；包内 `UPSTREAM.md` 记来源、
+  本地改动（为自检删掉 `tests/package.test.mjs` 里两条 `.github/workflows` 断言）与和上游 `diff -ru --exclude=.git --exclude=.github` 的同步方式。
+  该副本自带 309 条测试，取入后全绿。
+- 形态与其它五个随壳插件不同：宿主入口是 `index.mjs`（不是 esbuild 出的 `index.js`），宿主实现全在 `server/`（12 个 `.mjs`，
+  `service.mjs` 157 KB、`sessions.mjs` 57 KB）；客户端半区是**手写的** 428 KB `client.js`（`window.__ModuleLoader__.load`），无构建、
+  `package.json` 里没有任何 dependencies/peerDependencies（上游测试断言零依赖），因此依赖闭包拷贝对它什么都不做。
+  包声明 `engines.dsh ">=0.2.1-rc.5 <0.3.0"`，随包运行时 0.2.2-rc.2 在范围内；`dsh.client.inject` 只要 locale/layout/sidebar/workspace 四个标准服务。
+- 实现（`prepare-plugins.mjs`）：`PACKAGES` 增加 `dsh-super-kanban`；`KEEP_FILES` 增加 `index.mjs`；`KEEP_DIRECTORIES` 增加 `server/`；
+  入口改为读包声明 `main`（缺省 `./index.js`）再校验存在性，不再写死 `index.js`。
+  同时把「入口的相对 import 自检」扩展成**全部复制进来的模块**：上游 `server/service.mjs` 用多行 `import {…} from "./store.mjs"`，
+  只查入口的话少一个 `server/` 文件仍能构建通过、启动才报 `ERR_MODULE_NOT_FOUND`。
+- `verify-package.mjs` 的组合门禁在原有 id 列表里加 `super-kanban`，打包后断言它的行真实出现在 `dsh --dump-config` 里。
+- 证据：`plugins:prepare` 为 6 个插件 / 365 文件 / 3.39 MiB，其中 dsh-super-kanban 16 文件 / 0.72 MiB / deps 为空；
+  负向验证：临时抽走源里的 `server/store.mjs`，构建以 `dsh-super-kanban: server\service.mjs 引入了 ./store.mjs，但复制后的目录里没有它` 退出 1；
+  恢复后重新变绿。桌面全量测试 665 条 / 657 通过 / 0 失败 / 8 跳过；`build.mjs` + `smoke.mjs cookie --isolate-home` PASS，
+  启动日志 `随壳插件：已链接 6 个（… dsh-super-kanban …）`，产品页侧栏出现「任务看板」（字符串即 `client.js` 的 `任务看板` 标题），
+  `readyState complete`。冒烟里唯一的新警告是上游 `dsh-client-ui-account-notifications: pending (waiting for service: accountUi)`，
+  属 0.2.2 的既有等待，`verify-package.mjs` 的门禁早已只把「命名了随壳插件」的 `did not activate` 判为失败。
+
 ## Alternatives considered
 
 - **把插件源码并进 `dsh-desktop-shell` 面板插件，合成一个大包**。理由：能少一个分发单元，但四个插件是
@@ -112,5 +136,7 @@ Status: implemented
   迁移是幂等的，但**不会**回滚旧插件行——回滚需要用户自己从备份恢复。
 - 已有 profile 里若同名目录是真实目录，壳会改名保留并改用随壳版本；升级插件版本靠壳发版，不再靠市场。
 - MCP 会话 Cookie 从旧 ONE-WAY 行导入 `oneway.json`，旧行删除后不影响重扫码。
-- 后续可选：把 `dsh-win-notify`（会话通知）也纳入随壳分发；把手机访问 `pocket-close` 在冒烟里的偶发超时
-  定位到具体服务调用（当前用看门狗兜住，不影响用户）。
+- 随壳插件升级只随壳发版：`dsh-win-notify` 与 `dsh-super-kanban` 都已纳入（见第 4、5 节），不再走市场；
+  `dsh-super-kanban` 是 vendored 的上游源码（插件仓库里的 `dsh-super-kanban/`，含 `UPSTREAM.md`），
+  上游后续版本要按该文件里的 `diff -ru --exclude=.git --exclude=.github` 手工同步，不会自动跟随 npm。
+- 手机访问 `pocket-close` 在冒烟里的偶发超时仍未定位到具体服务调用（当前用看门狗兜住，不影响用户）。
