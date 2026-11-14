@@ -230,6 +230,26 @@ for (const relativePath of packaged.physical) {
 if (missing.length > 0) {
   fail(`asarUnpack 漏了 ${String(missing.length)} 个必须物理落盘的运行时文件，例如：${missing.slice(0, 5).join('、')}`)
 }
+
+// The Office preview resolver maps the native engine's package manifest from the ASAR to its
+// `app.asar.unpacked` twin, then Kit validates that manifest and runs the payload under
+// `program/`. Unpacking only `bin/` leaves both inside the archive: the mapping points at a
+// missing file and document preview fails with `document-render/failed` / `unavailable`.
+// Keep this check independent of the generated physical list so a one-line prepare-runtime
+// regression cannot silently reintroduce the broken install.
+{
+  const engineRoot = 'node_modules/@deepseek-ai/libreoffice-kit-win32-x64'
+  for (const relativePath of [
+    `${engineRoot}/package.json`,
+    `${engineRoot}/prebuilds.json`,
+    `${engineRoot}/program/program`,
+  ]) {
+    const physical = join(unpackedRoot, 'dsh', relativePath)
+    if (!existsSync(physical)) {
+      fail(`LibreOffice 原生引擎未完整解包：缺少 ${relativePath}（Office 预览会报 document-render/failed）`)
+    }
+  }
+}
 const wronglyPacked = archived.filter(entry => entry.unpacked && !entry.path.startsWith('dsh/'))
 if (wronglyPacked.length > 0) fail(`意外的 unpacked 条目：${wronglyPacked[0].path}`)
 

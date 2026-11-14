@@ -515,9 +515,20 @@ for (const file of files) {
 // entry point and its bundle must both be on disk. `verify-package.mjs` runs the unpacked pair to
 // prove it, which is also what makes a future "download the runtime into the ASAR" regression loud.
 const PHYSICAL_JS_TREES = ['node_modules/pnpm/bin/', 'node_modules/pnpm/dist/']
+
+// The native LibreOffice engine is discovered through its package manifest. `office-kit` maps
+// that manifest from the ASAR to `app.asar.unpacked`, then Kit validates the manifest and runs
+// the engine's `program/` payload. Unpacking only `bin/` leaves the manifest and payload inside
+// the archive, so the mapping points at a non-existent file and Office preview reports
+// `document-render/failed` with reason `unavailable`. Keep the whole engine package physical.
+const PHYSICAL_TREES = [
+  ...PHYSICAL_JS_TREES,
+  'node_modules/@deepseek-ai/libreoffice-kit-win32-x64/',
+]
 const physical = files.filter((file) => {
   if (foreign(file)) return false
   const inJsTrees = PHYSICAL_JS_TREES.some(tree => file.startsWith(tree))
+  const inPhysicalTree = PHYSICAL_TREES.some(tree => file.startsWith(tree))
   // A 0-byte file can never be physical: electron-builder writes the ASAR index entry for an empty
   // unpacked file but never creates the file itself, so `verify-package.mjs` would fail with
   // "asarUnpack 漏了 …（空文件）" — which is exactly how pnpm's vendored node-gyp was found
@@ -532,7 +543,7 @@ const physical = files.filter((file) => {
     }
     return false
   }
-  if (inJsTrees) return true
+  if (inPhysicalTree) return true
   const lower = file.toLowerCase()
   if (PHYSICAL_EXTENSIONS.some(extension => lower.endsWith(extension))) return true
   const name = file.slice(file.lastIndexOf('/') + 1)
