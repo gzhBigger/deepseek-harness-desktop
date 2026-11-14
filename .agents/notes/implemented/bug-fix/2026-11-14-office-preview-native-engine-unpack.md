@@ -60,3 +60,10 @@ libreoffice-kit-win32-x64/
 - `verify-package.mjs` 现在会在打包阶段拦住“只解包 bin”的回归；如果未来更换引擎包布局，需要同步更新这三项路径。
 - `prepare-runtime.mjs` 的 `PHYSICAL_TREES` 是整棵目录解包，未来加其他需要物理执行的原生包时可以复用同一机制。
 - 该问题只影响安装版；仓库 runtime 直接跑时引擎目录是物理文件，所以本地开发与测试不会自然暴露这个缺口，必须依赖打包校验。
+
+## Release
+
+- 修复随 **v0.4.34** 发布：https://github.com/gzhBigger/deepseek-harness-desktop/releases/tag/v0.4.34
+- 安装包 `DSH.Desktop_0.4.34_x64-setup.exe` 250,830,451 B，SHA-256 `739468690083eb0ce06e876fb8f9639fdf7442e340194a3248ed8753a511fa28`。
+- 打包校验：asar 33,121 文件、物理 1,233、1 个随壳插件；cookie smoke 与手机网关 smoke 均 PASS。
+- 从发布产物的 `app.asar` 用 resolver 再跑一次 docx 转换：`{"backend":"native","missingFonts":["Courier"],"pageCount":1}`。
