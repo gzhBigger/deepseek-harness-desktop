@@ -15,7 +15,8 @@ worktree 会话时，自动把对应的工作树与分支清理掉，而不是�
 在 `dsh-git-panel` 宿主监听 `workspace/session-archived`，只对能确认有效 cwd 的会话执行
 清理，并且只在 `readWorktrees()` 判定 `merged === true` 时删树 + 删分支。
 
-- 有效 cwd 取 `workingDirectory.get(session)`，回退到当前请求表里的 `path`；没有路径就跳过。
+- 有效 cwd 取 `workingDirectory.get(session)`，回退到持久映射、再回退当前请求表里的 `path`；
+  没有路径就跳过。
 - 有效 cwd 可能在 worktree 内，此时 `inspectRepository()` 的 `repoRoot` 是这棵工作树本身，
   直接执行 `git worktree remove` 会拒绝删除“当前工作树”。因此用 `repo.commonDir` 的父目录
   找到主工作区，再在主工作区执行删除。
@@ -26,6 +27,16 @@ worktree 会话时，自动把对应的工作树与分支清理掉，而不是�
 - 新配置 `cleanupWorktreeOnArchive` 默认 `true`，设置页加 checkbox；用户可随时关闭。
 - 清理放在 `setTimeout(…, 0)` 里异步执行，失败只 warn，不阻塞/回滚归档。
 - 监听在 `createWorktreeRequests` 创建时注册，`dispose`/`ctx.effect` 时注销。
+- 创建成功后把 `{sessionId → path, branch}` 写入 `$DSH_HOME/git-panel/worktrees.json`。
+  真实故障是“worktree 在宿主重启前创建、归档发生在重启后”：请求表是内存的，归档时
+  `workingDirectory` projection 也可能已经不可取，路径为空导致清理静默放弃。持久映射
+  让归档事件和宿主重启都不再依赖内存表。
+- 启动时和每次读取 worktree 列表时调用 `reconcileArchived()`：从
+  `workspaceRegistry.archivedSessionIds` 找出已归档 session，按映射补一次清理；覆盖事件
+  漏送/进程重启的情况。清单里没有映射的旧树不会误删。
+- `probeDirty` 忽略 Windows 保留设备名（`CON`/`NUL`/`COM1`…）的 `?? ` 条目：它们是
+  MSYS/Git for Windows 的瞬态伪设备，不能算未提交改动，否则合并且干净的树会永远被判 dirty，
+  用户看到的就是“worktree 没删”。
 
 ## Alternatives considered
 
@@ -44,14 +55,17 @@ worktree 会话时，自动把对应的工作树与分支清理掉，而不是�
   在工作树页手动处理。
 - 归档事件后清理是异步的，磁盘上的树可能比会话晚几秒消失。
 - 宿主代码改动需要重启 DSH 才生效；客户端设置页刷新即可看到开关。
-- 若会话在宿主重启后归档、且既没有有效 projection 也没有请求表记录，无法定位 worktree，
-  此时不会自动清理（安全侧失败）。
+- 旧版本创建的 worktree 没有持久映射；升级后的第一次归档若该会话之前从未由新版创建过
+  工作树，仍无法定位，需要手动清理。此后新建的工作树都带映射。
+- 已手工清理本次反馈的 `dsh-sessione-8719`（分支已合并且工作树干净）。
 
 ## Verification
 
 - `node --check src/host/worktree.js src/host/worktree-requests.js`。
-- `node tests/worktree-requests.test.js`：21 assertions，覆盖
+- `node tests/worktree-requests.test.js`：27 assertions，覆盖
   - 创建后归档：树和分支都删除；
-  - 有未提交改动时归档：树和分支都保留，随后手动清理。
+  - 有未提交改动时归档：树和分支都保留，随后手动清理；
+  - 模拟宿主重启（请求表为空、session 不可取）：持久映射 + `reconcileArchived()` 仍能删树和分支；
+  - Windows 设备名 `CON` 不算未跟踪改动，普通未跟踪文件仍算。
 - `pnpm test` 12 个测试文件全过；`pnpm run typecheck`、`pnpm run build`、`pnpm run validate` 全过。
 - 新增设置字段 `cleanupWorktreeOnArchive`，README 配置表与工作树说明同步更新。
