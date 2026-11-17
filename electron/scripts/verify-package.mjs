@@ -189,6 +189,33 @@ for (const fileName of onboardingFiles) {
   if (data.byteLength === 0) fail(`app.asar 里的引导插画是空文件：${fileName}`)
 }
 
+// The shell patches two upstream core packages in prepare-runtime.mjs so a worktree Session's
+// file tree and workspace-files API follow the `workingDirectory` projection instead of the
+// immutable header cwd. A rebuild that loses either replacement silently ships the old
+// behavior — the file panel keeps showing the main checkout while Git and tools use the
+// worktree. Inspect the packaged bytes, not just the source tree.
+const EFFECTIVE_CWD_MARKERS = [
+  [
+    join('dsh', 'node_modules', '@deepseek-ai', 'dsh-client-ui-sidebar-files', 'lib', 'client.js'),
+    'projectionValues?.workingDirectory??s?.cwd',
+    '文件侧栏仍用 session.header.cwd 取根目录',
+  ],
+  [
+    join('dsh', 'node_modules', '@deepseek-ai', 'dsh-api-workspace-files', 'lib', 'index.js'),
+    'scope.workingDirectory?.get(session)',
+    'workspaceFiles API 仍用 session.header.cwd 解析根目录',
+  ],
+]
+for (const [entry, marker, message] of EFFECTIVE_CWD_MARKERS) {
+  let text = ''
+  try {
+    text = (await archive.readFile(entry)).toString('utf8')
+  } catch (error) {
+    fail(`app.asar 里缺少 ${entry}：${String(error)}`)
+  }
+  if (!text.includes(marker)) fail(`${entry} 没有有效 cwd 补丁：${message}`)
+}
+
 // Walk the archive the same way the runtime verification does: every file under `dsh/`.
 const archived = []
 const collect = (node, path) => {

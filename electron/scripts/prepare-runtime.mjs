@@ -52,6 +52,61 @@ function fail(message) {
   process.exit(1)
 }
 
+/**
+ * Make the core file surfaces follow a Session's effective cwd, not its immutable header.
+ *
+ * `working-directory` stores the effective directory in the `workingDirectory` Session
+ * projection: the header keeps identifying the original project, while an Agent (and its
+ * tools) may move into a worktree. The files sidebar and the workspace-files lookup still
+ * read `header.cwd`, so a worktree Session shows the main checkout's tree and resolves
+ * relative paths against the wrong root.
+ *
+ * These are two upstream packages, not profile plugins, so patch them in the copied runtime
+ * here. The replacements are exact and asserted: a DSH upgrade that changes these lines must
+ * fail the build instead of silently shipping a half-fixed file tree.
+ */
+function patchEffectiveCwd() {
+  const patches = [
+    ['dsh-client-ui-sidebar-files/lib/client.js', [
+      {
+        from: 'const cwd=useSessions(sessions=>sessions.byId[sessionId]?.cwd);',
+        to: 'const cwd=useSessions(sessions=>{const s=sessions.byId[sessionId];return s?.projectionValues?.workingDirectory??s?.cwd});',
+        count: 3,
+      },
+    ]],
+    ['dsh-api-workspace-files/lib/index.js', [
+      {
+        from: 'ctx.inject(["sessions", "typert"], (scope) => {',
+        to: 'ctx.inject(["sessions", "typert", "workingDirectory"], (scope) => {',
+        count: 1,
+      },
+      {
+        from: 'const live = scope.sessions.get(sessionId)?.header;',
+        to: 'const session = scope.sessions.get(sessionId); const live = session?.header;',
+        count: 1,
+      },
+      {
+        from: 'workspaceRoot: header.cwd ?? scope.sandboxPolicy.workspaceRoot',
+        to: 'workspaceRoot: (session === void 0 ? void 0 : scope.workingDirectory?.get(session)) ?? header.cwd ?? scope.sandboxPolicy.workspaceRoot',
+        count: 1,
+      },
+    ]],
+  ]
+  for (const [relativePath, replacements] of patches) {
+    const path = join(output, 'node_modules', '@deepseek-ai', ...relativePath.split('/'))
+    let source = readFileSync(path, 'utf8')
+    for (const replacement of replacements) {
+      const actual = source.split(replacement.from).length - 1
+      if (actual !== replacement.count) {
+        fail(`${relativePath} 的有效 cwd 补丁失配：期望 ${String(replacement.count)} 处，实际 ${String(actual)} 处（DSH 升级后请同步 prepare-runtime）`)
+      }
+      source = source.replaceAll(replacement.from, replacement.to)
+    }
+    writeFileSync(path, source)
+  }
+  log('    ✔ 文件侧栏/文件 API 已改为优先使用 workingDirectory projection')
+}
+
 /** Recursive size, in bytes. */
 function measure(directory) {
   let bytes = 0
@@ -164,6 +219,7 @@ log('    ✔ 替身就位，Electron 版本不再参与白名单校验')
 rmSync(output, { recursive: true, force: true })
 mkdirSync(dirname(output), { recursive: true })
 cpSync(stagedNodeModules, join(output, 'node_modules'), { recursive: true })
+patchEffectiveCwd()
 
 const PRUNE_DIRECTORY = /(^|\/)(tests?|__tests?__|__mocks__)(\/|$)/u
 const PRUNE_FILE = [
