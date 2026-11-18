@@ -267,9 +267,9 @@ test('a custom index is validated before it is saved, cached, and selected', asy
 
   const added = await service.addSource('https://team.example/plugins.json')
   assert.equal(added.ok, true)
-  assert.equal(added.items?.length, 2, 'community + the new source')
-  assert.equal(added.selected, added.items?.[1]?.id)
-  assert.equal(service.sources().items[1]?.title, '团队市场')
+  assert.equal(added.items?.length, 1, 'only the source the user added')
+  assert.equal(added.selected, added.items?.[0]?.id)
+  assert.equal(service.sources().items[0]?.title, '团队市场')
   assert.equal(existsSync(join(stateDir, 'sources.json')), true)
   assert.equal(existsSync(join(stateDir, 'market-cache', `${String(added.selected)}.json`)), true)
   assert.equal(calls, 1)
@@ -282,14 +282,14 @@ test('a custom index is validated before it is saved, cached, and selected', asy
 
   const removed = service.removeSource(String(added.selected))
   assert.equal(removed.ok, true)
-  assert.equal(removed.items?.length, 1)
-  assert.equal(removed.selected, 'community')
+  assert.equal(removed.items?.length, 0)
+  assert.equal(removed.selected, '')
   assert.equal(existsSync(join(stateDir, 'market-cache', `${String(added.selected)}.json`)), false)
 
   const rejected = await service.addSource('https://team.example/broken.json')
   assert.equal(rejected.ok, false)
   assert.match(rejected.reason ?? '', /format/u)
-  assert.equal(service.sources().items.length, 1, 'a broken index is never saved')
+  assert.equal(service.sources().items.length, 0, 'a broken index is never saved')
 })
 
 test('a failed refresh falls back to the cached index instead of emptying the market', async () => {
@@ -320,4 +320,16 @@ test('a failed refresh falls back to the cached index instead of emptying the ma
   assert.equal(refreshed.stale, true)
   assert.equal(refreshed.entries.length, 1)
   assert.match(refreshed.warning ?? '', /offline/u)
+})
+
+test('browsing before adding a source fails clearly instead of falling back to a built-in catalog', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-market-empty-'))
+  const service = new MarketService({
+    profileDir: dir,
+    runtimeRoot: dir,
+    appExecutable: 'x',
+    stateDir: join(dir, '.market'),
+  })
+  assert.deepEqual(service.sources(), { items: [], selected: '' })
+  await assert.rejects(() => service.browse(), /还没有添加市场源/u)
 })

@@ -228,6 +228,12 @@
       border-radius: 12px; background: var(--surface); color: var(--fg); overflow: hidden;
     }
     #readme-dialog::backdrop { background: rgba(0, 0, 0, .55); }
+    #source-dialog, #github-dialog {
+      width: min(560px, 92vw); padding: var(--s4); border: 1px solid var(--line);
+      border-radius: 12px; background: var(--surface); color: var(--fg);
+    }
+    #source-dialog::backdrop, #github-dialog::backdrop { background: rgba(0, 0, 0, .55); }
+    #source-dialog .card-actions, #github-dialog .card-actions { justify-content: flex-end; }
     .readme-bar {
       display: flex; align-items: center; gap: var(--s3); padding: var(--s3) var(--s4);
       border-bottom: 1px solid var(--line-soft); position: sticky; top: 0; background: var(--surface); z-index: 1;
@@ -275,7 +281,7 @@
     <button id="tab-installed" class="tab" role="tab" aria-selected="false">已安装的插件</button>
   </div>
 
-  <!-- 市场源：内置社区目录 + 用户添加的官方格式 index。源与解析结果都缓存在 profile 下，
+  <!-- 市场源：用户添加的官方格式 index；没有内置源。源与解析结果都缓存在 profile 下，
        打开窗口先显示缓存，再在后台刷新。 -->
   <div class="toolbar market-only" id="sourceRow">
     <label class="sort">市场源
@@ -303,20 +309,13 @@
     </label>
     <label class="check" id="clientOnlyRow" hidden><input id="clientOnly" type="checkbox" /> 只看带界面的</label>
     <span class="grow"></span>
+    <button id="github-open" class="ghost">从 GitHub 安装…</button>
     <button id="registry-toggle" class="ghost">在 registry 里搜…</button>
     <button id="catalog-reload" class="ghost">重新加载目录</button>
   </div>
   <div class="catbar market-only" id="chips"></div>
-  <!-- GitHub sources: about half the catalog exists only there, and some plugins are in neither the
-       catalog nor npm. The repository is read before anything is installed, and one whose manifest
-       declares install scripts needs a second click — those scripts run on this machine. -->
-  <div class="toolbar market-only" id="githubRow">
-    <input id="github-input" type="search" placeholder="从 GitHub 安装：owner/repo 或 https://github.com/owner/repo（可加 #ref）" autocomplete="off" />
-    <button id="github-go" class="primary">检查并安装</button>
-    <button id="github-confirm" class="primary" hidden>确认执行安装脚本并安装</button>
-  </div>
   <div class="statusline market-only">
-    <span id="catalog-status">正在加载社区目录…</span>
+    <span id="catalog-status">还没有市场源</span>
     <span class="grow"></span>
     <span class="pager">
       <span id="pageInfo">第 1 页</span>
@@ -405,6 +404,22 @@
     <p id="source-error" class="readme-failure" hidden></p>
     <div class="card-actions">
       <button id="source-submit" class="primary">读取并添加</button>
+    </div>
+  </dialog>
+
+  <dialog id="github-dialog">
+    <div class="readme-bar">
+      <strong>从 GitHub 安装</strong>
+      <span class="grow"></span>
+      <button id="github-cancel" class="ghost">取消</button>
+    </div>
+    <p class="card-meta">填写 owner/repo 或完整仓库地址（可加 #ref）。安装前会先读取仓库，确认它声明了 dsh 字段；需要执行安装脚本时会再让你确认一次。</p>
+    <input id="github-input" type="search" placeholder="owner/repo 或 https://github.com/owner/repo（可加 #ref）" autocomplete="off" style="width:100%;box-sizing:border-box" />
+    <p id="github-status" class="readme-failure" hidden></p>
+    <div class="card-actions">
+      <button id="github-confirm" class="primary" hidden>确认执行安装脚本并安装</button>
+      <span class="grow"></span>
+      <button id="github-go" class="primary">检查并安装</button>
     </div>
   </dialog>
 
@@ -574,7 +589,7 @@
       el('next').disabled = last
     }
 
-    // ── 社区目录（默认视图）────────────────────────────────────────────────
+    // ── 市场源目录（默认视图）──────────────────────────────────────────────
     // Browsing, not searching: one request fills the list and the chips, and every later interaction
     // (chip, sort, typing) is answered in this process.
     let mode = 'catalog'
@@ -583,11 +598,11 @@
     let catalogCategory = ''
     let catalogLoading = false
     let skeletons = 0
-    let sources = { items: [], selected: 'community' }
-    let sourceName = '社区目录'
+    let sources = { items: [], selected: '' }
+    let sourceName = '插件目录'
 
     function selectedSource() {
-      return (sources.items || []).find(source => source.id === sources.selected) || { id: 'community', title: '社区目录', kind: 'community', builtin: true }
+      return (sources.items || []).find(source => source.id === sources.selected) || null
     }
 
     function renderSources() {
@@ -596,28 +611,69 @@
       for (const source of sources.items || []) {
         const option = document.createElement('option')
         option.value = source.id
-        option.textContent = source.title + (source.kind === 'index' ? '（自定义）' : '')
+        option.textContent = source.title + '（自定义）'
         select.append(option)
       }
       const current = selectedSource()
-      if ((sources.items || []).some(source => source.id === sources.selected)) select.value = sources.selected
+      if (current === null) {
+        const option = document.createElement('option')
+        option.value = ''
+        option.textContent = '还没有市场源'
+        select.append(option)
+        select.value = ''
+        sourceName = '插件目录'
+        el('source-remove').disabled = true
+        el('source-remove').title = '还没有市场源'
+        el('source-refresh').disabled = true
+        el('source-status').textContent = '未添加'
+        el('source-status').title = ''
+        return
+      }
+      select.value = current.id
       sourceName = current.title
-      el('source-remove').disabled = current.builtin === true
-      el('source-remove').title = current.builtin === true ? '内置社区目录不能移除' : '移除这个市场源（不会卸载已安装插件）'
-      el('source-status').textContent = current.kind === 'index' ? '官方格式索引' : '内置'
+      el('source-remove').disabled = false
+      el('source-remove').title = '移除这个市场源（不会卸载已安装插件）'
+      el('source-refresh').disabled = false
+      el('source-status').textContent = '官方格式索引'
       el('source-status').title = current.url || ''
     }
 
     async function loadSources() {
-      const result = await api.sources().catch(() => ({ items: [], selected: 'community' }))
+      const result = await api.sources().catch(() => ({ items: [], selected: '' }))
       if (result !== null && typeof result === 'object') {
         sources = {
           items: Array.isArray(result.items) ? result.items : [],
-          selected: typeof result.selected === 'string' ? result.selected : 'community',
+          selected: typeof result.selected === 'string' ? result.selected : '',
         }
       }
-      if ((sources.items || []).length === 0) sources.items = [{ id: 'community', title: '社区目录', kind: 'community', builtin: true }]
       renderSources()
+    }
+
+    function showNoSources() {
+      mode = 'catalog'
+      catalog = { categories: [], entries: [], total: 0, page: 0, pageSize: 40, installed: [], updated: '' }
+      sourceName = '插件目录'
+      el('catalog-status').textContent = '还没有市场源'
+      el('count').textContent = ''
+      el('pageInfo').textContent = '第 1 页'
+      el('prev').disabled = true
+      el('next').disabled = true
+      el('chips').replaceChildren()
+      const empty = document.createElement('div')
+      empty.className = 'state'
+      const title = document.createElement('p')
+      title.textContent = '还没有添加市场源。'
+      const hint = document.createElement('p')
+      hint.className = 'card-meta'
+      hint.textContent = '添加一个官方 format 1 插件索引后，这里会显示可安装的插件。'
+      const add = document.createElement('button')
+      add.className = 'primary'
+      add.textContent = '添加市场源…'
+      add.addEventListener('click', () => el('source-add').click())
+      empty.append(title, hint, add)
+      el('list').replaceChildren(empty)
+      report('rendered 0 cards (no sources)')
+      note('就绪')
     }
 
     function capabilityText(cap) {
@@ -791,6 +847,11 @@
 
     async function loadCatalog(page, refresh) {
       if (catalogLoading) return
+      const current = selectedSource()
+      if (current === null) {
+        showNoSources()
+        return
+      }
       catalogLoading = true
       mode = 'catalog'
       el('catalog-status').textContent = '正在加载' + (sourceName || '目录') + '…'
@@ -820,7 +881,7 @@
         el('catalog-status').textContent = sourceName + '加载失败：' + (error && error.message ? error.message : String(error))
         note(sourceName + '加载失败，已切到 registry 搜索')
         mode = 'registry'
-        el('registry-toggle').textContent = '回到社区目录'
+        el('registry-toggle').textContent = '回到插件目录'
         el('clientOnlyRow').hidden = false
         await search(true).catch(() => {})
       } finally {
@@ -876,10 +937,39 @@
      *
      * The repository is read first: one that is not a plugin is refused without touching the profile,
      * and one whose manifest declares install scripts says so and waits for a second click, because
-     * those scripts execute on this machine. No modal — the warning lands in the status line and the
-     * button changes.
+     * those scripts execute on this machine. The dialog's status line explains the wait and the
+     * confirmation button changes when the manifest declares install scripts.
      */
     let githubPending = ''
+
+    function githubNote(text) {
+      if (el('github-dialog').open) {
+        const status = el('github-status')
+        status.textContent = text
+        status.hidden = text === ''
+      } else {
+        note(text)
+      }
+    }
+
+    function openGithubDialog(value) {
+      const dialog = el('github-dialog')
+      el('github-input').value = value || ''
+      el('github-status').textContent = ''
+      el('github-status').hidden = true
+      el('github-confirm').hidden = true
+      githubPending = ''
+      if (!dialog.open) dialog.showModal()
+      el('github-input').focus()
+      el('github-input').select()
+    }
+
+    function closeGithubDialog() {
+      githubPending = ''
+      el('github-confirm').hidden = true
+      el('github-status').hidden = true
+      el('github-dialog').close()
+    }
 
     async function githubAction(input, confirmed) {
       const target = (confirmed === true && githubPending !== '' ? githubPending : input).trim()
@@ -889,27 +979,28 @@
       el('github-go').disabled = true
       try {
         if (confirmed !== true) {
-          note('正在读取 GitHub 仓库…')
+          githubNote('正在读取 GitHub 仓库…')
           const inspected = await api.inspectGithub(target)
           if (!inspected.ok) {
-            note('不能安装：' + (inspected.reason || '仓库不可用'))
+            githubNote('不能安装：' + (inspected.reason || '仓库不可用'))
             return
           }
           if (inspected.scripts && inspected.scripts.length > 0) {
             githubPending = target
             el('github-confirm').hidden = false
-            note('注意：' + inspected.name + ' 会在你机器上执行安装脚本（' + inspected.scripts.join('、') + '）—— 确认无误请点右侧按钮')
+            githubNote('注意：' + inspected.name + ' 会在你机器上执行安装脚本（' + inspected.scripts.join('、') + '）—— 确认无误请点右侧按钮')
             return
           }
-          note('正在从 GitHub 安装 ' + inspected.name + ' …')
+          githubNote('正在从 GitHub 安装 ' + inspected.name + ' …')
         } else {
-          note('正在从 GitHub 安装（已确认安装脚本）…')
+          githubNote('正在从 GitHub 安装（已确认安装脚本）…')
         }
         el('github-confirm').hidden = true
         githubPending = ''
         beginProgress('正在从 GitHub 安装 ' + target + ' …')
         const result = await api.installGithub(target)
         if (result.ok) {
+          closeGithubDialog()
           el('failure').hidden = true
           await refreshInstalled()
           if (mode === 'catalog') await loadCatalog(catalog.page)
@@ -918,10 +1009,10 @@
           note(result.name + ' 已安装（重启应用后生效）')
         } else {
           showFailure(result)
-          note('安装失败：' + (result.failure && result.failure.message ? result.failure.message : '详情见下方'))
+          githubNote('安装失败：' + (result.failure && result.failure.message ? result.failure.message : '详情见下方'))
         }
       } catch (error) {
-        note('失败：' + (error && error.message ? error.message : String(error)))
+        githubNote('失败：' + (error && error.message ? error.message : String(error)))
       } finally {
         busy = false
         el('go').disabled = false
@@ -1262,9 +1353,19 @@
     })
     el('sort').addEventListener('change', () => { if (mode === 'catalog') void loadCatalog(0); else void search(true) })
     el('catalog-reload').addEventListener('click', () => void loadCatalog(0, true))
-    el('source-refresh').addEventListener('click', () => void loadCatalog(catalog.page || 0, true))
+    el('source-refresh').addEventListener('click', () => {
+      if (selectedSource() === null) return
+      void loadCatalog(catalog.page || 0, true)
+    })
     el('source-select').addEventListener('change', () => {
-      sources.selected = el('source-select').value
+      const next = el('source-select').value
+      if (next === '') {
+        sources.selected = ''
+        renderSources()
+        showNoSources()
+        return
+      }
+      sources.selected = next
       renderSources()
       catalogCategory = ''
       catalog.entries = []
@@ -1305,7 +1406,7 @@
     })
     el('source-remove').addEventListener('click', async () => {
       const current = selectedSource()
-      if (current.builtin === true) return
+      if (current === null) return
       if (!window.confirm('移除市场源「' + current.title + '」？已安装的插件不会被卸载。')) return
       const result = await api.removeSource(current.id).catch(error => ({ ok: false, reason: error && error.message ? error.message : String(error) }))
       if (result === null || typeof result !== 'object' || result.ok !== true) {
@@ -1319,12 +1420,17 @@
       await loadCatalog(0, true)
       note('市场源已移除')
     })
+    el('github-open').addEventListener('click', () => openGithubDialog(''))
+    el('github-cancel').addEventListener('click', closeGithubDialog)
+    el('github-dialog').addEventListener('click', event => {
+      if (event.target === el('github-dialog')) closeGithubDialog()
+    })
     el('github-go').addEventListener('click', () => void githubAction(el('github-input').value, false))
     el('github-confirm').addEventListener('click', () => void githubAction(githubPending, true))
     el('github-input').addEventListener('keydown', event => { if (event.key === 'Enter') void githubAction(el('github-input').value, false) })
     el('registry-toggle').addEventListener('click', () => {
       mode = mode === 'catalog' ? 'registry' : 'catalog'
-      el('registry-toggle').textContent = mode === 'catalog' ? '在 registry 里搜…' : '回到社区目录'
+      el('registry-toggle').textContent = mode === 'catalog' ? '在 registry 里搜…' : '回到插件目录'
       el('clientOnlyRow').hidden = mode === 'catalog'
       setSortOptions(mode)
       if (mode === 'catalog') void loadCatalog(catalog.page)

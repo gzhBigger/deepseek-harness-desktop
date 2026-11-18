@@ -1,31 +1,26 @@
 /**
- * The market's sources: one built-in community catalog, plus any official plugin index the user adds.
+ * The market's sources: official plugin indexes the user adds.
  *
- * The built-in source is deliberately not written to disk: a file that could accidentally drop it
- * would turn "add a market" into "replace the only market". Custom sources are user preferences, so
- * they live next to the cache, not in the profile's package.json.
+ * There is deliberately no built-in catalog. A market that starts with a source of its own silently
+ * turns "add a market" into "replace the only market", and it would fetch that source on every open
+ * even when the user only wanted their own index. The list lives next to the cache, not in the
+ * profile's package.json.
  */
 
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
-import { CATALOG_URL } from './market-catalog-source.ts'
-
-/** The built-in community catalog. */
-export const COMMUNITY_SOURCE_ID = 'community'
-
 /** One source shown in the selector. */
 export interface MarketSource {
   readonly id: string
   readonly title: string
   readonly url: string
-  readonly kind: 'community' | 'index'
-  readonly builtin: boolean
+  readonly kind: 'index'
   readonly addedAt?: string
 }
 
-/** What the sources file stores. Built-in sources are implicit. */
+/** What the sources file stores. */
 export interface StoredMarketSources {
   readonly custom: readonly {
     readonly id: string
@@ -36,18 +31,9 @@ export interface StoredMarketSources {
   readonly selected: string
 }
 
-/** The only source every installation starts with. */
-export const COMMUNITY_SOURCE: MarketSource = {
-  id: COMMUNITY_SOURCE_ID,
-  title: '社区目录',
-  url: CATALOG_URL,
-  kind: 'community',
-  builtin: true,
-}
-
-/** A fresh state: only the built-in source. */
+/** A fresh state: no market until the user adds one. */
 export function emptyStoredSources(): StoredMarketSources {
-  return { custom: [], selected: COMMUNITY_SOURCE_ID }
+  return { custom: [], selected: '' }
 }
 
 /** Validate one source URL exactly as the official index UI does. */
@@ -80,7 +66,7 @@ export function sourceFallbackTitle(url: string): string {
   }
 }
 
-/** Read the sources file; a broken file falls back to the built-in source instead of bricking the market. */
+/** Read the sources file; a broken file falls back to "no sources" instead of bricking the market. */
 export function readStoredSources(file: string): StoredMarketSources {
   if (!existsSync(file)) return emptyStoredSources()
   try {
@@ -112,9 +98,8 @@ export function readStoredSources(file: string): StoredMarketSources {
         })
       }
     }
-    const selected = typeof record.selected === 'string' && (record.selected === COMMUNITY_SOURCE_ID || seen.has(record.selected))
-      ? record.selected
-      : COMMUNITY_SOURCE_ID
+    const requested = typeof record.selected === 'string' ? record.selected : ''
+    const selected = requested !== '' && seen.has(requested) ? requested : (custom[0]?.id ?? '')
     return { custom, selected }
   } catch {
     return emptyStoredSources()
@@ -129,19 +114,15 @@ export function writeStoredSources(file: string, state: StoredMarketSources): vo
   renameSync(temporary, file)
 }
 
-/** All sources, built-in first. */
+/** All user-added sources, in the order they were added. */
 export function allSources(state: StoredMarketSources): readonly MarketSource[] {
-  return [
-    COMMUNITY_SOURCE,
-    ...state.custom.map(source => ({
-      id: source.id,
-      title: source.title,
-      url: source.url,
-      kind: 'index' as const,
-      builtin: false,
-      addedAt: source.addedAt,
-    })),
-  ]
+  return state.custom.map(source => ({
+    id: source.id,
+    title: source.title,
+    url: source.url,
+    kind: 'index' as const,
+    addedAt: source.addedAt,
+  }))
 }
 
 /** The cache path for one source. */

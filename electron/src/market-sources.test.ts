@@ -1,6 +1,6 @@
 /**
- * Source preferences: a URL becomes a stable id, the built-in source is never persisted away, and a
- * half-written preferences file must not brick the market.
+ * Source preferences: a URL becomes a stable id, there is no built-in source, and a half-written
+ * preferences file must not brick the market.
  */
 
 import assert from 'node:assert/strict'
@@ -10,8 +10,6 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 
 import {
-  COMMUNITY_SOURCE,
-  COMMUNITY_SOURCE_ID,
   allSources,
   emptyStoredSources,
   normalizeSourceUrl,
@@ -34,27 +32,41 @@ test('source URLs are validated and fingerprinted', () => {
   assert.equal(sourceCachePath('/tmp/market', 'abc'), join('/tmp/market', 'market-cache', 'abc.json'))
 })
 
-test('the built-in source is always present and cannot be written away', () => {
+test('there is no built-in source: a fresh install starts empty', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-market-sources-'))
   const file = join(dir, 'sources.json')
   assert.deepEqual(readStoredSources(file), emptyStoredSources())
+  assert.deepEqual(emptyStoredSources(), { custom: [], selected: '' })
+  assert.deepEqual(allSources(emptyStoredSources()), [])
+  assert.deepEqual(readStoredSources(file), emptyStoredSources())
+})
+
+test('custom sources persist and a selected id resolves to a real source', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-market-sources-'))
+  const file = join(dir, 'sources.json')
   const state = {
     custom: [{ id: sourceId('https://example.com/a.json'), url: 'https://example.com/a.json', title: 'A', addedAt: '2026-01-01T00:00:00.000Z' }],
     selected: sourceId('https://example.com/a.json'),
   }
   writeStoredSources(file, state)
   assert.deepEqual(readStoredSources(file), state)
-  assert.equal(allSources(readStoredSources(file))[0]?.id, COMMUNITY_SOURCE_ID)
-  assert.equal(allSources(readStoredSources(file))[0]?.title, COMMUNITY_SOURCE.title)
+  assert.equal(allSources(readStoredSources(file))[0]?.id, state.custom[0]?.id)
   assert.match(readFileSync(file, 'utf8'), /\n$/u)
 
   writeFileSync(file, '{ not json', 'utf8')
-  assert.deepEqual(readStoredSources(file), emptyStoredSources(), 'a broken file falls back to the built-in source')
+  assert.deepEqual(readStoredSources(file), emptyStoredSources(), 'a broken file falls back to no sources')
 })
 
-test('a selected id that is no longer in custom falls back to the community source', () => {
+test('a selected id that is no longer in custom falls back to the first remaining source, or empty', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-market-sources-'))
   const file = join(dir, 'sources.json')
+  const first = sourceId('https://example.com/a.json')
+  writeFileSync(file, JSON.stringify({
+    custom: [{ id: first, url: 'https://example.com/a.json', title: 'A', addedAt: '2026-01-01T00:00:00.000Z' }],
+    selected: 'gone',
+  }), 'utf8')
+  assert.equal(readStoredSources(file).selected, first)
+
   writeFileSync(file, JSON.stringify({ custom: [], selected: 'gone' }), 'utf8')
-  assert.equal(readStoredSources(file).selected, COMMUNITY_SOURCE_ID)
+  assert.equal(readStoredSources(file).selected, '')
 })

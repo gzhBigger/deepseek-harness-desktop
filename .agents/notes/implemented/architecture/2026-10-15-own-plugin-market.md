@@ -174,3 +174,21 @@ Status: implemented
 - `market-service.test.ts`：自定义源先校验后保存、缓存命中不重复 fetch、remove 删缓存、坏索引不保存、刷新失败用缓存。
 - `market-ui.test.ts`：新增源控件后"脚本查找的每个 id 都存在"仍通过。
 - `npm run typecheck`、4 个市场测试文件 28/28、全量 `npm test` 672/664 通过/8 跳过、`npm run build` 通过；真实窗口验证（添加源、切换、安装 Git 源）待打包后补。
+
+## 第六批：默认无源，GitHub 安装收进弹窗（2026-11-18）
+
+**改变**：用户看到第五批的界面后明确说「现在不需要内置市场源，然后直接从 github 安装的功能不要一直显示，可以做成某个按钮或弹窗点开来」。所以第五批「内置社区目录保留且不可删除」的决定被本条取代。
+
+**决定**：
+
+- **默认无源，不预置社区目录**：`emptyStoredSources()` 的 `selected` 为空；市场无源时显示「还没有添加市场源。」和「添加市场源…」，不自动请求 `awesome-dsh-plugin.com/plugins.json`。这样窗口打开就是本地缓存/空状态，不再被一份 5 MB 固定目录拖慢；用户显式添加的官方 format 1 index 才是唯一来源。
+- **移除源不再有社区特判**：`removeSource` 删 custom + 缓存，选中项回退到第一个剩余源，没有就空；`browse` 无源直接报「还没有添加市场源」，不再 fallback 到 registry。
+- **GitHub 安装改为弹窗**：常驻 `#githubRow` 删除，工具栏「从 GitHub 安装…」打开 `<dialog id="github-dialog">`；检查、脚本确认、错误/成功提示都留在弹窗内。卡片里的「从 GitHub 安装」仍直接调用同一 `githubAction`，不改变安装准入链。
+- **默认空状态的代价**：第一次打开没有可浏览内容，用户必须知道/拿到一个 index URL；这是用「默认不替用户选源」换启动速度和源边界清晰，空状态已给出添加按钮与说明。
+
+**证据**：
+
+- `market-sources.test.ts`：无内置源、fresh selected 为空、custom 持久化、失效 selected 回第一个 custom 或空。
+- `market-service.test.ts`：added.items 长度 1、remove 后 0/空、坏源不保存、无源 browse 明确失败。
+- `market-ui.test.ts`：无内置源、无 `githubRow`、`github-dialog`/`github-open`/`showNoSources` 断言。
+- 真实窗口（源码 dev 壳）：无源空状态、GitHub 弹窗、临时 `format:1` 源添加→卡片渲染→移除→回空状态均实测；`npm test` 675/667 通过/8 跳过，`typecheck`、`build` 通过。

@@ -52,6 +52,15 @@ test('every element the script looks up actually exists in the markup', () => {
   assert.deepEqual(missing, [], `the script looks up ids that do not exist: ${missing.join(', ')}`)
 })
 
+test('there is no built-in catalog and GitHub install stays behind a dialog', () => {
+  assert.doesNotMatch(markup, /id="githubRow"/u, 'the GitHub input must not be a permanent toolbar')
+  assert.doesNotMatch(markup, /社区目录/u, 'the market must not ship a built-in community source')
+  assert.match(markup, /id="github-open"/u)
+  assert.match(markup, /id="github-dialog"[\s\S]*id="github-input"[\s\S]*id="github-go"/u)
+  assert.match(script, /function showNoSources/u)
+  assert.match(script, /还没有市场源/u)
+})
+
 test('the market chrome is switched as blocks, so a view never keeps another view controls', () => {
   assert.match(script, /querySelectorAll\('\.market-only'\)/u, 'switchView must toggle .market-only blocks')
   const blocks = page.match(/class="[^"]*market-only/gu) ?? []

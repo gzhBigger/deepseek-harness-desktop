@@ -17,11 +17,9 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { join } from 'node:path'
 
 import { packumentUrl, searchMarketPackages, type MarketSearchResult } from './market-catalog.ts'
-import { countByCategory, fetchCatalog, filterByCategory, searchCatalog, sortCatalog, type Catalog, type CatalogSort } from './market-catalog-source.ts'
+import { countByCategory, filterByCategory, searchCatalog, sortCatalog, type Catalog, type CatalogSort } from './market-catalog-source.ts'
 import { indexTitle, parseIndexCatalog } from './market-index-source.ts'
 import {
-  COMMUNITY_SOURCE,
-  COMMUNITY_SOURCE_ID,
   allSources,
   emptyStoredSources,
   normalizeSourceUrl,
@@ -286,7 +284,7 @@ export class MarketService {
     return this.#options.stateDir ?? join(this.#options.profileDir, '.market')
   }
 
-  /** Current sources, built-in first, and which one the window is showing. */
+  /** Current sources, and which one the window is showing (`''` when none has been added). */
   sources(): { readonly items: readonly MarketSource[]; readonly selected: string } {
     const state = this.#sourceState()
     return { items: allSources(state), selected: state.selected }
@@ -341,13 +339,12 @@ export class MarketService {
     }
   }
 
-  /** Remove one custom source. The built-in community catalog cannot be removed. */
+  /** Remove one source; the next remaining source becomes selected, or the market is empty. */
   removeSource(id: string): { readonly ok: boolean; readonly reason?: string; readonly items?: readonly MarketSource[]; readonly selected?: string } {
-    if (id === COMMUNITY_SOURCE_ID) return { ok: false, reason: '社区目录是内置市场，不能移除' }
     const state = this.#sourceState()
     if (!state.custom.some(source => source.id === id)) return { ok: false, reason: '没有这个市场源' }
     const custom = state.custom.filter(source => source.id !== id)
-    const selected = state.selected === id ? COMMUNITY_SOURCE_ID : state.selected
+    const selected = state.selected === id ? (custom[0]?.id ?? '') : state.selected
     this.#sources = { custom, selected }
     this.#writeSources()
     try {
@@ -373,7 +370,7 @@ export class MarketService {
     /** Ignore cached copies and refetch (the window's "reload" button). */
     readonly refresh?: boolean
   } = {}): Promise<{
-    readonly source: { readonly id: string; readonly title: string; readonly kind: 'community' | 'index' }
+    readonly source: { readonly id: string; readonly title: string; readonly kind: 'index' }
     readonly stale?: boolean
     readonly warning?: string
     readonly categories: readonly { readonly id: string; readonly en?: string; readonly zh?: string }[]
@@ -388,6 +385,7 @@ export class MarketService {
   }> {
     const getJson = this.#options.fetchJsonImpl ?? (url => fetchJson(url))
     const source = this.#sourceById(request.source)
+    if (source === undefined) throw new Error('还没有添加市场源')
     this.#select(source.id)
     const loaded = await this.#catalog(source, getJson, request.refresh === true)
     const catalog = loaded.catalog
@@ -446,9 +444,7 @@ export class MarketService {
   }
 
   async #fetchSource(source: MarketSource, getJson: JsonFetcher): Promise<Catalog> {
-    return source.kind === 'community'
-      ? await fetchCatalog(getJson)
-      : parseIndexCatalog(await getJson(source.url), source.url)
+    return parseIndexCatalog(await getJson(source.url), source.url)
   }
 
   /** Refresh one stale source in the background; failures leave the cached copy in place. */
@@ -475,23 +471,23 @@ export class MarketService {
       } catch {
         this.#sources = emptyStoredSources()
       }
-      // A custom source that vanished from the file while its id was still selected is not a source.
-      if (this.#sources.selected !== COMMUNITY_SOURCE_ID && !this.#sources.custom.some(source => source.id === this.#sources?.selected)) {
-        this.#sources = { ...this.#sources, selected: COMMUNITY_SOURCE_ID }
+      // A source that vanished from the file while its id was still selected is not a source.
+      if (this.#sources.selected !== '' && !this.#sources.custom.some(source => source.id === this.#sources?.selected)) {
+        this.#sources = { ...this.#sources, selected: this.#sources.custom[0]?.id ?? '' }
       }
     }
     return this.#sources
   }
 
-  #sourceById(id: string | undefined): MarketSource {
+  #sourceById(id: string | undefined): MarketSource | undefined {
     const state = this.#sourceState()
-    return allSources(state).find(source => source.id === id) ?? COMMUNITY_SOURCE
+    return allSources(state).find(source => source.id === id) ?? allSources(state)[0]
   }
 
   #select(id: string): void {
     const state = this.#sourceState()
     if (state.selected === id) return
-    if (id !== COMMUNITY_SOURCE_ID && !state.custom.some(source => source.id === id)) return
+    if (id !== '' && !state.custom.some(source => source.id === id)) return
     this.#sources = { ...state, selected: id }
     this.#writeSources()
   }
