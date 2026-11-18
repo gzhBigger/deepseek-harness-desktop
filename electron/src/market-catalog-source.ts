@@ -21,10 +21,16 @@ export const CATALOG_URL = 'https://awesome-dsh-plugin.com/plugins.json'
 export interface CatalogEntry {
   readonly name: string
   readonly owner?: string
+  /** Display author when the source has one. */
+  readonly author?: string
+  /** Display title when the source publishes one (official indexes do). */
+  readonly title?: string
   /** GitHub (or other) source URL. */
   readonly url?: string
   /** Human-readable catalog page. */
   readonly page?: string
+  /** Icon URL, already resolved against the index address. */
+  readonly icon?: string
   /** Category id, as the catalog's own vocabulary spells it (e.g. `agi`, `ui`). */
   readonly category?: string
   readonly description?: { readonly en?: string; readonly zh?: string }
@@ -38,6 +44,13 @@ export interface CatalogEntry {
    * installs what upstream would, rather than guessing a ref.
    */
   readonly install?: string
+  /**
+   * An exact pnpm spec produced by an official index.
+   *
+   * npm indexes only need `name@version`, so they keep `npm`; a Git index names a commit and possibly
+   * a subdirectory, which cannot be reconstructed from the plugin name alone.
+   */
+  readonly spec?: string
   readonly version?: string
   readonly stars: number
   readonly downloads: number
@@ -116,6 +129,8 @@ export function parseCatalog(document: unknown): Catalog {
     const owner = text(entry.owner)
     const url = text(entry.url)
     const page = text(entry.page)
+    const title = text(entry.title)
+    const icon = text(entry.icon)
     const category = text(entry.category)
     const described = description(entry.description)
     const npm = text(entry.npm)
@@ -130,6 +145,8 @@ export function parseCatalog(document: unknown): Catalog {
       ...(owner === undefined ? {} : { owner }),
       ...(url === undefined ? {} : { url }),
       ...(page === undefined ? {} : { page }),
+      ...(title === undefined ? {} : { title }),
+      ...(icon === undefined ? {} : { icon }),
       ...(category === undefined ? {} : { category }),
       ...(described === undefined ? {} : { description: described }),
       ...(install === undefined ? {} : { install }),

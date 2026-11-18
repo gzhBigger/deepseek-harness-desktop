@@ -5,7 +5,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -237,4 +237,87 @@ test('checkUpdates compares registry versions and refuses to guess for checkouts
   assert.equal(kit?.source, 'other')
   assert.equal(kit?.hasUpdate, false)
   assert.match(kit?.reason ?? '', /无法比较/u)
+})
+test('a custom index is validated before it is saved, cached, and selected', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-market-sources-'))
+  const stateDir = join(dir, '.market')
+  const index = {
+    format: 1,
+    title: { zh: '团队市场' },
+    plugins: [{
+      name: 'dsh-team-tool',
+      title: { zh: '团队工具' },
+      repository: { url: 'https://github.com/team/dsh-team-tool' },
+      versions: [{ version: '1.2.3', publishTimestamp: 1700000000, source: { type: 'npm' } }],
+    }],
+  }
+  let calls = 0
+  const service = new MarketService({
+    profileDir: dir,
+    runtimeRoot: dir,
+    appExecutable: 'x',
+    stateDir,
+    fetchJsonImpl: url => {
+      calls += 1
+      assert.match(url, /team\.example/u)
+      if (url.includes('broken')) return Promise.resolve({ format: 2, plugins: [] })
+      return Promise.resolve(index)
+    },
+  })
+
+  const added = await service.addSource('https://team.example/plugins.json')
+  assert.equal(added.ok, true)
+  assert.equal(added.items?.length, 2, 'community + the new source')
+  assert.equal(added.selected, added.items?.[1]?.id)
+  assert.equal(service.sources().items[1]?.title, '团队市场')
+  assert.equal(existsSync(join(stateDir, 'sources.json')), true)
+  assert.equal(existsSync(join(stateDir, 'market-cache', `${String(added.selected)}.json`)), true)
+  assert.equal(calls, 1)
+
+  const browsed = await service.browse({ source: String(added.selected) })
+  assert.equal(browsed.source.title, '团队市场')
+  assert.equal(browsed.total, 1)
+  assert.equal((browsed.entries[0] as { name?: string } | undefined)?.name, 'dsh-team-tool')
+  assert.equal(calls, 1, 'the second view is served from the cache')
+
+  const removed = service.removeSource(String(added.selected))
+  assert.equal(removed.ok, true)
+  assert.equal(removed.items?.length, 1)
+  assert.equal(removed.selected, 'community')
+  assert.equal(existsSync(join(stateDir, 'market-cache', `${String(added.selected)}.json`)), false)
+
+  const rejected = await service.addSource('https://team.example/broken.json')
+  assert.equal(rejected.ok, false)
+  assert.match(rejected.reason ?? '', /format/u)
+  assert.equal(service.sources().items.length, 1, 'a broken index is never saved')
+})
+
+test('a failed refresh falls back to the cached index instead of emptying the market', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-market-stale-'))
+  const stateDir = join(dir, '.market')
+  let fail = false
+  const service = new MarketService({
+    profileDir: dir,
+    runtimeRoot: dir,
+    appExecutable: 'x',
+    stateDir,
+    fetchJsonImpl: () => {
+      if (fail) return Promise.reject(new Error('offline'))
+      return Promise.resolve({
+        format: 1,
+        title: { zh: '本地索引' },
+        plugins: [{
+          name: 'dsh-local',
+          versions: [{ version: '1.0.0', source: { type: 'npm' } }],
+        }],
+      })
+    },
+  })
+  const added = await service.addSource('https://local.example/index.json')
+  assert.equal(added.ok, true)
+  fail = true
+  const refreshed = await service.browse({ source: String(added.selected), refresh: true })
+  assert.equal(refreshed.stale, true)
+  assert.equal(refreshed.entries.length, 1)
+  assert.match(refreshed.warning ?? '', /offline/u)
 })

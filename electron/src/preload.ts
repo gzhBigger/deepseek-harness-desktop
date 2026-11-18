@@ -187,6 +187,12 @@ if (isMarketDocument()) {
     readme: (request: unknown) => ipcRenderer.invoke(MARKET_IPC.readme, request) as Promise<unknown>,
     act: (action: string, name: string, version?: string) =>
       ipcRenderer.invoke(MARKET_IPC.act, action, name, version ?? '') as Promise<unknown>,
+    /** Install an exact pnpm spec from an official Git index (commit pinned by the publisher). */
+    installSpec: (name: string, spec: string) =>
+      ipcRenderer.invoke(MARKET_IPC.installSpec, name, spec) as Promise<unknown>,
+    sources: () => ipcRenderer.invoke(MARKET_IPC.sources) as Promise<unknown>,
+    addSource: (url: string) => ipcRenderer.invoke(MARKET_IPC.addSource, url) as Promise<unknown>,
+    removeSource: (id: string) => ipcRenderer.invoke(MARKET_IPC.removeSource, id) as Promise<unknown>,
     profileDir: () => ipcRenderer.invoke(MARKET_IPC.profileDir) as Promise<string>,
     updates: () => ipcRenderer.invoke(MARKET_IPC.updates) as Promise<unknown>,
     log: (limit?: number) => ipcRenderer.invoke(MARKET_IPC.log, limit) as Promise<unknown>,

@@ -13,11 +13,26 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { packumentUrl, searchMarketPackages, type MarketSearchResult } from './market-catalog.ts'
 import { countByCategory, fetchCatalog, filterByCategory, searchCatalog, sortCatalog, type Catalog, type CatalogSort } from './market-catalog-source.ts'
+import { indexTitle, parseIndexCatalog } from './market-index-source.ts'
+import {
+  COMMUNITY_SOURCE,
+  COMMUNITY_SOURCE_ID,
+  allSources,
+  emptyStoredSources,
+  normalizeSourceUrl,
+  readStoredSources,
+  sourceCachePath,
+  sourceFallbackTitle,
+  sourceId,
+  writeStoredSources,
+  type MarketSource,
+  type StoredMarketSources,
+} from './market-sources.ts'
 import { inspectGithubPlugin } from './market-github.ts'
 import type { MarketProgressEvent, MarketSearchRequest } from './market-ipc.ts'
 import { readPluginReadme, type ReadmeFailure, type ReadmeRequest, type ReadmeResult } from './market-readme.ts'
@@ -39,6 +54,8 @@ export const FETCH_TIMEOUT_MS = 20_000
 export const PNPM_TIMEOUT_MS = 15 * 60_000
 /** Registry requests must identify themselves; npm blocks anonymous-looking bulk traffic. */
 export const USER_AGENT = 'dsh-desktop-market/1.0 (+https://github.com/gzhBigger/deepseek-harness-desktop)'
+/** How long a parsed source stays fresh in memory/on disk. */
+export const CATALOG_TTL_MS = 10 * 60 * 1000
 
 /** A JSON GET that fails loudly instead of returning `undefined` on an HTTP error. */
 export type JsonFetcher = (url: string) => Promise<unknown>
@@ -187,6 +204,8 @@ export interface MarketServiceOptions {
   readonly log?: (line: string) => void
   /** Directory for the action log (the shell's log directory); omit to keep no file log. */
   readonly logDir?: string
+  /** Where source preferences and their parsed caches live; defaults under the profile. */
+  readonly stateDir?: string
 }
 
 /**
@@ -214,14 +233,17 @@ function installedVersion(profileDir: string, name: string): string | undefined 
 export class MarketService {
   readonly #options: MarketServiceOptions
   /**
-   * The catalog, kept in memory for a short while.
+   * Parsed catalogs by source id, kept in memory for a short while.
    *
-   * The document is ~5 MB and the upstream market refetches it on every open; we refetch per open too,
-   * but a user who switches category or pages does not pay for it again. Deliberately not persisted:
-   * per the upstream market's own reasoning, a stale catalog answers "this plugin does not exist" for
-   * something published this morning, and a wrong answer is worse than a slow one.
+   * A hit is returned before any network request, so reopening the window or switching back to a
+   * source shows its previous list instantly; an expired hit is returned as `stale` and refreshed in
+   * the background by the window.
    */
-  #catalogCache: { readonly at: number; readonly catalog: Catalog } | undefined
+  #catalogCache = new Map<string, { readonly at: number; readonly catalog: Catalog }>()
+  /** Sources with a stale-while-revalidate fetch in flight, so one slow publisher is fetched once. */
+  #refreshing = new Set<string>()
+  /** Source preferences, loaded lazily from `stateDir`. */
+  #sources: StoredMarketSources | undefined
   /** README 预览缓存：同一次会话里反复打开同一个插件不该重复抓取。 */
   #readmeCache = new Map<string, { readonly at: number; readonly value: ReadmeResult | ReadmeFailure }>()
 
@@ -259,21 +281,101 @@ export class MarketService {
     }), SEARCH_DEADLINE_MS, 'registry 查询超时（网络慢，或 registry 不可达）')
   }
 
+  /** Where source preferences and caches live. */
+  get stateDir(): string {
+    return this.#options.stateDir ?? join(this.#options.profileDir, '.market')
+  }
+
+  /** Current sources, built-in first, and which one the window is showing. */
+  sources(): { readonly items: readonly MarketSource[]; readonly selected: string } {
+    const state = this.#sourceState()
+    return { items: allSources(state), selected: state.selected }
+  }
+
   /**
-   * The browsable catalog: one request, then everything is local.
+   * Add one official index after reading and validating it.
    *
-   * A category chip click, a sort change and typing in the box all go through here and cost nothing
-   * beyond this process — which is what makes "the market opens with a list" possible at all.
+   * The window cannot validate the index itself (no network), and saving a URL before its first fetch
+   * would make a typo look exactly like an empty market. Fetching here means "add" either succeeds
+   * with a usable source or fails with the publisher's actual error.
+   */
+  async addSource(input: string): Promise<{
+    readonly ok: boolean
+    readonly reason?: string
+    readonly items?: readonly MarketSource[]
+    readonly selected?: string
+  }> {
+    let url: string
+    try {
+      url = normalizeSourceUrl(input)
+    } catch (error) {
+      return { ok: false, reason: error instanceof Error ? error.message : String(error) }
+    }
+    const state = this.#sourceState()
+    const existing = state.custom.find(source => source.url === url)
+    if (existing !== undefined) {
+      this.#select(existing.id)
+      return { ok: true, ...this.sources() }
+    }
+    const getJson = this.#options.fetchJsonImpl ?? (target => fetchJson(target))
+    try {
+      const document = await getJson(url)
+      const catalog = parseIndexCatalog(document, url)
+      const id = sourceId(url)
+      const custom = [
+        ...state.custom,
+        {
+          id,
+          url,
+          title: indexTitle(document, sourceFallbackTitle(url)),
+          addedAt: new Date().toISOString(),
+        },
+      ]
+      this.#sources = { custom, selected: id }
+      this.#writeSources()
+      this.#writeCache(id, catalog)
+      this.#catalogCache.set(id, { at: Date.now(), catalog })
+      return { ok: true, ...this.sources() }
+    } catch (error) {
+      return { ok: false, reason: `读取索引失败：${error instanceof Error ? error.message : String(error)}` }
+    }
+  }
+
+  /** Remove one custom source. The built-in community catalog cannot be removed. */
+  removeSource(id: string): { readonly ok: boolean; readonly reason?: string; readonly items?: readonly MarketSource[]; readonly selected?: string } {
+    if (id === COMMUNITY_SOURCE_ID) return { ok: false, reason: '社区目录是内置市场，不能移除' }
+    const state = this.#sourceState()
+    if (!state.custom.some(source => source.id === id)) return { ok: false, reason: '没有这个市场源' }
+    const custom = state.custom.filter(source => source.id !== id)
+    const selected = state.selected === id ? COMMUNITY_SOURCE_ID : state.selected
+    this.#sources = { custom, selected }
+    this.#writeSources()
+    try {
+      rmSync(sourceCachePath(this.stateDir, id), { force: true })
+    } catch {
+      // A cache we cannot delete only wastes space; the source itself is gone.
+    }
+    this.#catalogCache.delete(id)
+    return { ok: true, ...this.sources() }
+  }
+
+  /**
+   * The browsable catalog: a cached source is returned before the network, so opening the window is
+   * immediate after the first successful load. `refresh` bypasses both caches on purpose.
    */
   async browse(request: {
+    readonly source?: string
     readonly query?: string
     readonly category?: string
     readonly sort?: CatalogSort
     readonly page?: number
     readonly pageSize?: number
-    /** Ignore a cached copy and refetch (the window's "reload" button). */
+    /** Ignore cached copies and refetch (the window's "reload" button). */
     readonly refresh?: boolean
   } = {}): Promise<{
+    readonly source: { readonly id: string; readonly title: string; readonly kind: 'community' | 'index' }
+    readonly stale?: boolean
+    readonly warning?: string
     readonly categories: readonly { readonly id: string; readonly en?: string; readonly zh?: string }[]
     /** Entries per category over the whole catalog (a chip's number must not depend on the page). */
     readonly categoryCounts: Readonly<Record<string, number>>
@@ -285,13 +387,19 @@ export class MarketService {
     readonly installed: readonly string[]
   }> {
     const getJson = this.#options.fetchJsonImpl ?? (url => fetchJson(url))
-    const catalog = await this.#catalog(getJson, request.refresh === true)
+    const source = this.#sourceById(request.source)
+    this.#select(source.id)
+    const loaded = await this.#catalog(source, getJson, request.refresh === true)
+    const catalog = loaded.catalog
     const filtered = searchCatalog(filterByCategory(catalog.entries, request.category), request.query ?? '')
     const sorted = sortCatalog(filtered, request.sort ?? 'stars')
     const pageSize = Math.min(120, Math.max(1, Math.trunc(request.pageSize ?? 40)))
     const page = Math.max(0, Math.trunc(request.page ?? 0))
     const start = page * pageSize
     return {
+      source: { id: source.id, title: source.title, kind: source.kind },
+      ...(loaded.stale ? { stale: true } : {}),
+      ...(loaded.warning === undefined ? {} : { warning: loaded.warning }),
       categories: catalog.categories,
       categoryCounts: countByCategory(catalog.entries),
       ...(catalog.updated === undefined ? {} : { updated: catalog.updated }),
@@ -303,17 +411,137 @@ export class MarketService {
     }
   }
 
-  /** Fetch the catalog, reusing a recent copy within the window. */
-  async #catalog(getJson: JsonFetcher, refresh = false): Promise<Catalog> {
-    const cached = this.#catalogCache
-    if (!refresh && cached !== undefined && Date.now() - cached.at < 10 * 60 * 1000) return cached.catalog
-    const catalog = await fetchCatalog(getJson)
-    this.#catalogCache = { at: Date.now(), catalog }
-    return catalog
+  /** Fetch one source, falling back to its disk cache when the publisher is unreachable. */
+  async #catalog(source: MarketSource, getJson: JsonFetcher, refresh: boolean): Promise<{ catalog: Catalog; stale: boolean; warning?: string }> {
+    const memory = this.#catalogCache.get(source.id)
+    if (!refresh && memory !== undefined) {
+      const stale = Date.now() - memory.at >= CATALOG_TTL_MS
+      if (stale) void this.#refreshSource(source, getJson)
+      return { catalog: memory.catalog, stale }
+    }
+    if (!refresh) {
+      const disk = this.#readCache(source.id)
+      if (disk !== undefined) {
+        this.#catalogCache.set(source.id, disk)
+        const stale = Date.now() - disk.at >= CATALOG_TTL_MS
+        if (stale) void this.#refreshSource(source, getJson)
+        return { catalog: disk.catalog, stale }
+      }
+    }
+    try {
+      const catalog = await this.#fetchSource(source, getJson)
+      this.#catalogCache.set(source.id, { at: Date.now(), catalog })
+      this.#writeCache(source.id, catalog)
+      return { catalog, stale: false }
+    } catch (error) {
+      const fallback = this.#readCache(source.id)
+      if (fallback !== undefined) {
+        this.#catalogCache.set(source.id, fallback)
+        const reason = error instanceof Error ? error.message : String(error)
+        this.#options.log?.(`插件市场：刷新 ${source.title} 失败，使用缓存（${reason}）`)
+        return { catalog: fallback.catalog, stale: true, warning: `刷新失败，显示的是缓存：${reason}` }
+      }
+      throw error
+    }
+  }
+
+  async #fetchSource(source: MarketSource, getJson: JsonFetcher): Promise<Catalog> {
+    return source.kind === 'community'
+      ? await fetchCatalog(getJson)
+      : parseIndexCatalog(await getJson(source.url), source.url)
+  }
+
+  /** Refresh one stale source in the background; failures leave the cached copy in place. */
+  async #refreshSource(source: MarketSource, getJson: JsonFetcher): Promise<void> {
+    if (this.#refreshing.has(source.id)) return
+    this.#refreshing.add(source.id)
+    try {
+      const catalog = await this.#fetchSource(source, getJson)
+      // The user may remove the source while its refresh is in flight; do not resurrect its cache.
+      if (!this.#sourceState().custom.some(item => item.id === source.id)) return
+      this.#catalogCache.set(source.id, { at: Date.now(), catalog })
+      this.#writeCache(source.id, catalog)
+    } catch (error) {
+      this.#options.log?.(`插件市场：后台刷新 ${source.title} 失败（${error instanceof Error ? error.message : String(error)}）`)
+    } finally {
+      this.#refreshing.delete(source.id)
+    }
+  }
+
+  #sourceState(): StoredMarketSources {
+    if (this.#sources === undefined) {
+      try {
+        this.#sources = readStoredSources(this.#sourcesFile())
+      } catch {
+        this.#sources = emptyStoredSources()
+      }
+      // A custom source that vanished from the file while its id was still selected is not a source.
+      if (this.#sources.selected !== COMMUNITY_SOURCE_ID && !this.#sources.custom.some(source => source.id === this.#sources?.selected)) {
+        this.#sources = { ...this.#sources, selected: COMMUNITY_SOURCE_ID }
+      }
+    }
+    return this.#sources
+  }
+
+  #sourceById(id: string | undefined): MarketSource {
+    const state = this.#sourceState()
+    return allSources(state).find(source => source.id === id) ?? COMMUNITY_SOURCE
+  }
+
+  #select(id: string): void {
+    const state = this.#sourceState()
+    if (state.selected === id) return
+    if (id !== COMMUNITY_SOURCE_ID && !state.custom.some(source => source.id === id)) return
+    this.#sources = { ...state, selected: id }
+    this.#writeSources()
+  }
+
+  #sourcesFile(): string {
+    return join(this.stateDir, 'sources.json')
+  }
+
+  #writeSources(): void {
+    if (this.#sources === undefined) return
+    try {
+      writeStoredSources(this.#sourcesFile(), this.#sources)
+    } catch (error) {
+      this.#options.log?.(`插件市场：保存市场源失败（${error instanceof Error ? error.message : String(error)}）`)
+    }
+  }
+
+  #readCache(id: string): { readonly at: number; readonly catalog: Catalog } | undefined {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(sourceCachePath(this.stateDir, id), 'utf8'))
+      if (parsed === null || typeof parsed !== 'object') return undefined
+      const record = parsed as Record<string, unknown>
+      const at = typeof record.at === 'number' ? record.at : 0
+      const catalog = record.catalog
+      if (catalog === null || typeof catalog !== 'object' || !Array.isArray((catalog as { entries?: unknown }).entries)) return undefined
+      return { at, catalog: catalog as Catalog }
+    } catch {
+      return undefined
+    }
+  }
+
+  #writeCache(id: string, catalog: Catalog): void {
+    const path = sourceCachePath(this.stateDir, id)
+    try {
+      mkdirSync(join(this.stateDir, 'market-cache'), { recursive: true })
+      const temporary = `${path}.tmp`
+      writeFileSync(temporary, `${JSON.stringify({ at: Date.now(), catalog })}\n`, 'utf8')
+      renameSync(temporary, path)
+    } catch (error) {
+      this.#options.log?.(`插件市场：写缓存失败（${error instanceof Error ? error.message : String(error)}）`)
+    }
   }
   /** Install an exact version. */
   install(name: string, version: string, onProgress?: ProgressSink): Promise<MarketActionResult> {
     return this.#act('install', name, version, undefined, onProgress)
+  }
+
+  /** Install an exact pnpm spec (official Git indexes carry a commit and optional subdirectory). */
+  installSpec(name: string, spec: string, onProgress?: ProgressSink): Promise<MarketActionResult> {
+    return this.#act('install', name, undefined, spec, onProgress)
   }
 
   /** Move a plugin to an exact version. */

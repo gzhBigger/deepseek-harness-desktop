@@ -226,6 +226,31 @@ export class MarketWindow {
         throw error
       }
     }))
+    ipcMain.handle(MARKET_IPC.sources, (event) => guard(event, () => service.sources()))
+    ipcMain.handle(MARKET_IPC.addSource, (event, input: unknown) => guard(event, async () => {
+      const result = await service.addSource(typeof input === 'string' ? input : '')
+      this.#options.log(result.ok
+        ? `market source added ${String(result.selected)}`
+        : `market source failed ${result.reason ?? ''}`)
+      return result
+    }))
+    ipcMain.handle(MARKET_IPC.removeSource, (event, id: unknown) => guard(event, () => {
+      const result = service.removeSource(typeof id === 'string' ? id : '')
+      this.#options.log(result.ok
+        ? `market source removed ${String(id)}`
+        : `market source remove failed ${result.reason ?? ''}`)
+      return result
+    }))
+    ipcMain.handle(MARKET_IPC.installSpec, (event, name: unknown, spec: unknown): Promise<MarketActionResultResponse> => guard(event, async () => {
+      if (typeof name !== 'string' || name === '' || typeof spec !== 'string' || spec === '') {
+        return { ok: false, action: 'install' as const, name: typeof name === 'string' ? name : '', spec: typeof spec === 'string' ? spec : '', code: null, output: '缺少插件名或安装 spec', failure: { kind: 'unknown' as const, message: '缺少插件名或安装 spec' }, bundleRegistered: false }
+      }
+      const result = await service.installSpec(name, spec, this.#progressSink())
+      this.#options.log(result.ok
+        ? `market install-spec ok ${name} (${spec})`
+        : `market install-spec failed ${name} ${result.failure?.kind ?? 'unknown'} ${result.failure?.message ?? ''}`)
+      return result
+    }))
     // GitHub sources. Nothing is installed until the repository has been read and vetted, so a
     // repository that is not a plugin cannot change the profile at all. Both outcomes are logged in a
     // form the packaged smoke can require.

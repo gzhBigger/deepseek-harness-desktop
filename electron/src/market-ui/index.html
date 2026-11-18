@@ -275,6 +275,19 @@
     <button id="tab-installed" class="tab" role="tab" aria-selected="false">已安装的插件</button>
   </div>
 
+  <!-- 市场源：内置社区目录 + 用户添加的官方格式 index。源与解析结果都缓存在 profile 下，
+       打开窗口先显示缓存，再在后台刷新。 -->
+  <div class="toolbar market-only" id="sourceRow">
+    <label class="sort">市场源
+      <select id="source-select" aria-label="市场源"></select>
+    </label>
+    <button id="source-add" class="ghost">添加市场源…</button>
+    <button id="source-remove" class="ghost">移除</button>
+    <span id="source-status" class="profile" style="flex:none;direction:ltr"></span>
+    <span class="grow"></span>
+    <button id="source-refresh" class="ghost">刷新</button>
+  </div>
+
   <!-- Market-only chrome. Everything here is hidden as a block when the installed view is showing,
        which is what keeps that view free of sort/filter/pager controls. -->
   <div class="toolbar market-only">
@@ -379,6 +392,20 @@
       <button id="readme-close" class="ghost">关闭</button>
     </div>
     <div id="readme-body" class="readme-body"></div>
+  </dialog>
+
+  <dialog id="source-dialog">
+    <div class="readme-bar">
+      <strong>添加市场源</strong>
+      <span class="grow"></span>
+      <button id="source-cancel" class="ghost">取消</button>
+    </div>
+    <p class="card-meta">填写官方插件索引（index）的 http(s) 地址，例如 https://example.com/plugins.json。添加前会先读取并校验；失败不会保存。</p>
+    <input id="source-url" type="url" placeholder="https://example.com/plugins.json" autocomplete="off" style="width:100%;box-sizing:border-box" />
+    <p id="source-error" class="readme-failure" hidden></p>
+    <div class="card-actions">
+      <button id="source-submit" class="primary">读取并添加</button>
+    </div>
   </dialog>
 
   <footer>
@@ -556,6 +583,42 @@
     let catalogCategory = ''
     let catalogLoading = false
     let skeletons = 0
+    let sources = { items: [], selected: 'community' }
+    let sourceName = '社区目录'
+
+    function selectedSource() {
+      return (sources.items || []).find(source => source.id === sources.selected) || { id: 'community', title: '社区目录', kind: 'community', builtin: true }
+    }
+
+    function renderSources() {
+      const select = el('source-select')
+      select.replaceChildren()
+      for (const source of sources.items || []) {
+        const option = document.createElement('option')
+        option.value = source.id
+        option.textContent = source.title + (source.kind === 'index' ? '（自定义）' : '')
+        select.append(option)
+      }
+      const current = selectedSource()
+      if ((sources.items || []).some(source => source.id === sources.selected)) select.value = sources.selected
+      sourceName = current.title
+      el('source-remove').disabled = current.builtin === true
+      el('source-remove').title = current.builtin === true ? '内置社区目录不能移除' : '移除这个市场源（不会卸载已安装插件）'
+      el('source-status').textContent = current.kind === 'index' ? '官方格式索引' : '内置'
+      el('source-status').title = current.url || ''
+    }
+
+    async function loadSources() {
+      const result = await api.sources().catch(() => ({ items: [], selected: 'community' }))
+      if (result !== null && typeof result === 'object') {
+        sources = {
+          items: Array.isArray(result.items) ? result.items : [],
+          selected: typeof result.selected === 'string' ? result.selected : 'community',
+        }
+      }
+      if ((sources.items || []).length === 0) sources.items = [{ id: 'community', title: '社区目录', kind: 'community', builtin: true }]
+      renderSources()
+    }
 
     function capabilityText(cap) {
       const labels = {
@@ -693,6 +756,14 @@
             removeButton.addEventListener('click', () => act('uninstall', entry.npm))
             actions.append(removeButton)
           }
+        } else if (entry.spec && entry.install) {
+          // 官方 Git index：publisher 固定了 commit（可能还有子目录），不能只按版本号猜。
+          const installButton = document.createElement('button')
+          installButton.className = 'primary'
+          installButton.textContent = here ? '重新安装（Git 固定提交）' : '安装（Git 固定提交）'
+          installButton.title = entry.spec
+          installButton.addEventListener('click', () => act('install', entry.name, entry.version || '', entry.spec))
+          actions.append(installButton)
         } else {
           // No npm mapping: the catalog's own install string (a release tarball URL or a `github:` spec)
           // is the faithful choice; the repository URL is the fallback.
@@ -722,24 +793,32 @@
       if (catalogLoading) return
       catalogLoading = true
       mode = 'catalog'
-      el('catalog-status').textContent = '正在加载社区目录…'
+      el('catalog-status').textContent = '正在加载' + (sourceName || '目录') + '…'
       if (catalog.entries.length === 0) showSkeletons(4)
       try {
-        const result = await api.browse({ query: catalogQuery, category: catalogCategory, sort: el('sort').value, page: page || 0, pageSize: catalog.pageSize, refresh: refresh === true })
+        const result = await api.browse({ source: sources.selected, query: catalogQuery, category: catalogCategory, sort: el('sort').value, page: page || 0, pageSize: catalog.pageSize, refresh: refresh === true })
         catalog = result
-        el('catalog-status').textContent = [
-          catalog.updated ? '目录更新于 ' + String(catalog.updated).slice(0, 10) : '社区目录',
+        if (result.source && typeof result.source.id === 'string') {
+          sources.selected = result.source.id
+          sourceName = result.source.title || sourceName
+          renderSources()
+        }
+        const parts = [
+          catalog.updated ? '目录更新于 ' + String(catalog.updated).slice(0, 10) : sourceName || '目录',
           String(catalog.categories.length) + ' 个分类',
           '只收录声明了 dsh 字段的插件',
-        ].join(' · ')
+        ]
+        if (catalog.stale) parts.push('缓存副本')
+        el('catalog-status').textContent = parts.join(' · ')
+        if (catalog.warning) note('刷新失败，显示的是缓存')
         renderChips()
         renderCatalog()
         report(`rendered ${catalog.entries.length} cards of ${catalog.total}`)
         // The footer already states the count; the activity line is for transient work only.
         note('就绪')
       } catch (error) {
-        el('catalog-status').textContent = '目录加载失败：' + (error && error.message ? error.message : String(error))
-        note('目录加载失败，已切到 registry 搜索')
+        el('catalog-status').textContent = sourceName + '加载失败：' + (error && error.message ? error.message : String(error))
+        note(sourceName + '加载失败，已切到 registry 搜索')
         mode = 'registry'
         el('registry-toggle').textContent = '回到社区目录'
         el('clientOnlyRow').hidden = false
@@ -892,14 +971,16 @@
     }
 
     if (typeof api.onProgress === 'function') api.onProgress(event => updateProgress(event))
-    async function act(action, name, version) {
+    async function act(action, name, version, spec) {
       if (busy) return
       busy = true
       el('go').disabled = true
       beginProgress(`${action === 'uninstall' ? '正在卸载' : action === 'update' ? '正在更新' : '正在安装'} ${name} …`)
       note(`${action === 'uninstall' ? '正在卸载' : action === 'update' ? '正在更新' : '正在安装'} ${name} …`)
       try {
-        const result = await api.act(action, name, version)
+        const result = spec
+          ? await api.installSpec(name, spec)
+          : await api.act(action, name, version)
         // The action is over the moment pnpm exits. Everything below is a *refresh* and may take
         // as long as the registry does; keeping the action timer running through it made a finished
         // install look stuck at 3% for minutes. Late progress events are ignored via progressClosed.
@@ -1181,6 +1262,63 @@
     })
     el('sort').addEventListener('change', () => { if (mode === 'catalog') void loadCatalog(0); else void search(true) })
     el('catalog-reload').addEventListener('click', () => void loadCatalog(0, true))
+    el('source-refresh').addEventListener('click', () => void loadCatalog(catalog.page || 0, true))
+    el('source-select').addEventListener('change', () => {
+      sources.selected = el('source-select').value
+      renderSources()
+      catalogCategory = ''
+      catalog.entries = []
+      catalog.total = 0
+      void loadCatalog(0)
+    })
+    el('source-add').addEventListener('click', () => {
+      el('source-url').value = ''
+      el('source-error').hidden = true
+      el('source-submit').disabled = false
+      el('source-dialog').showModal()
+      el('source-url').focus()
+    })
+    el('source-cancel').addEventListener('click', () => el('source-dialog').close())
+    el('source-dialog').addEventListener('click', event => {
+      if (event.target === el('source-dialog')) el('source-dialog').close()
+    })
+    el('source-submit').addEventListener('click', async () => {
+      const url = el('source-url').value.trim()
+      if (url === '') return
+      el('source-submit').disabled = true
+      el('source-error').hidden = true
+      note('正在读取并校验市场源…')
+      const result = await api.addSource(url).catch(error => ({ ok: false, reason: error && error.message ? error.message : String(error) }))
+      el('source-submit').disabled = false
+      if (result === null || typeof result !== 'object' || result.ok !== true) {
+        el('source-error').textContent = (result && typeof result.reason === 'string' && result.reason) || '添加失败'
+        el('source-error').hidden = false
+        return
+      }
+      el('source-dialog').close()
+      await loadSources()
+      catalogCategory = ''
+      catalog.entries = []
+      catalog.total = 0
+      await loadCatalog(0, true)
+      note('市场源已添加')
+    })
+    el('source-remove').addEventListener('click', async () => {
+      const current = selectedSource()
+      if (current.builtin === true) return
+      if (!window.confirm('移除市场源「' + current.title + '」？已安装的插件不会被卸载。')) return
+      const result = await api.removeSource(current.id).catch(error => ({ ok: false, reason: error && error.message ? error.message : String(error) }))
+      if (result === null || typeof result !== 'object' || result.ok !== true) {
+        note((result && result.reason) || '移除失败')
+        return
+      }
+      await loadSources()
+      catalogCategory = ''
+      catalog.entries = []
+      catalog.total = 0
+      await loadCatalog(0, true)
+      note('市场源已移除')
+    })
     el('github-go').addEventListener('click', () => void githubAction(el('github-input').value, false))
     el('github-confirm').addEventListener('click', () => void githubAction(githubPending, true))
     el('github-input').addEventListener('keydown', event => { if (event.key === 'Enter') void githubAction(el('github-input').value, false) })
@@ -1204,6 +1342,7 @@
       el('profile').textContent = where || '(未知)'
       el('profile').title = where || ''
       await refreshInstalled().catch(() => {})
+      await loadSources().catch(() => {})
       if (view === 'installed') { switchView('installed'); return }
       // Catalog first: this is the whole point — the window opens with a list to look at.
       el('clientOnlyRow').hidden = true

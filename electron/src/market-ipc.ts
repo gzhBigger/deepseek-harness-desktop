@@ -23,8 +23,16 @@ export const MARKET_IPC = {
   log: 'market:log',
   /** Contradictions this profile can be proven to have. */
   diagnose: 'market:diagnose',
-  /** Browse the community catalog (category, sort, local search). */
+  /** Browse the selected catalog source (category, sort, local search). */
   browse: 'market:browse',
+  /** List configured catalog sources and the selected one. */
+  sources: 'market:sources',
+  /** Validate and add one official-format index. */
+  addSource: 'market:add-source',
+  /** Remove one user-added source. */
+  removeSource: 'market:remove-source',
+  /** Install one exact pnpm spec (Git index entries carry a commit and optional path). */
+  installSpec: 'market:install-spec',
   /** Read one plugin's README for the preview dialog (fetched and parsed in the main process). */
   readme: 'market:readme',
   /** Read a GitHub repository's manifest without installing anything (the window warns first). */
