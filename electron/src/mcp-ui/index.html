@@ -62,11 +62,17 @@
   .scopebar:empty { display: none; }
   .scopebar button { padding: 4px 10px; border-radius: 999px; font-size: 12px; }
   .scopebar button.active { border-color: var(--accent); color: var(--accent); background: #eef6ff; }
-  .scope-head { display: flex; align-items: center; gap: 6px; margin: 10px 0 4px; color: var(--muted); font-size: 12px; }
+  .scope-head { display: flex; align-items: center; gap: 6px; margin: 16px 0 2px; color: var(--muted); font-size: 12px; }
+  .skill-group { display: flex; flex-direction: column; gap: 8px; }
+  .skill-group .card { border-left: 3px solid #e4e8ef; }
+  .skill-group .card:hover { border-color: #c9d8ff; }
+  .card .actions { flex-wrap: wrap; justify-content: flex-end; }
   .scope-head code { font-size: 11px; }
   .check { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.5; }
-  .market-detail { border: 1px solid var(--line); border-radius: 9px; padding: 12px; background: var(--panel); display: flex; flex-direction: column; gap: 8px; }
-  .market-detail[hidden] { display: none; }
+  .market-detail { border: 1px solid var(--line); border-radius: 9px; padding: 14px; background: var(--bg); display: flex; flex-direction: column; gap: 8px; }
+  .market-modal { width: min(760px, 100%); max-height: 88vh; border: 0; padding: 0; background: transparent; }
+  .market-modal::backdrop { background: rgba(0, 0, 0, .45); }
+  .market-modal .market-detail { max-height: 84vh; overflow-y: auto; box-shadow: 0 16px 40px rgba(0, 0, 0, .25); }
   .market-detail .command { display: flex; gap: 6px; align-items: center; }
   .market-detail .command code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-family: ui-monospace, Consolas, monospace; background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
   .market-metrics { color: var(--muted); font-size: 12px; }
@@ -216,7 +222,9 @@
       </div>
       <p class="hint">搜索 skills.sh 并安装到全局或项目。安装会下载到壳的本地 Skill 库，再链接到所选位置；不会执行第三方脚本。</p>
       <div class="scroll" id="marketResults"></div>
-      <div class="market-detail" id="marketDetail" hidden></div>
+      <dialog class="market-modal" id="marketDetailDialog">
+        <div class="market-detail" id="marketDetail"></div>
+      </dialog>
     </section>
   </main>
 
@@ -1048,8 +1056,32 @@
           if (skill.description) grow.append(el('div', 'desc', skill.description))
           grow.append(el('div', 'summary', skill.path))
           card.append(grow)
+          const actions = el('div', 'actions')
+          const remove = el('button', 'small danger', '删除')
+          remove.title = skill.linked ? '只删除这个链接，不动源目录。' : '删除磁盘上的技能目录，无法恢复。'
+          remove.addEventListener('click', () => { void removeInstalledSkill(skill) })
+          actions.append(remove)
+          card.append(actions)
           list.append(card)
         }
+      }
+    }
+
+    async function removeInstalledSkill(skill) {
+      const message = skill.linked
+        ? '删除 Skill 链接「' + skill.name + '」？只删除链接，不动源目录。'
+        : '删除 Skill「' + skill.name + '」？这会删除磁盘上的技能目录，无法恢复。'
+      if (!window.confirm(message)) return
+      try {
+        const result = await api.removeSkillEntry(skill.path)
+        if (!result || result.ok !== true) {
+          setStatus((result && result.reason) || '删除失败。', 'error')
+          return
+        }
+        await loadSkills()
+        setStatus('已删除 Skill。', 'ok')
+      } catch (error) {
+        setStatus('删除失败：' + String(error), 'error')
       }
     }
 
@@ -1075,6 +1107,7 @@
         head.append(el('span', null, '本地库（未发布）'))
         list.append(head)
       }
+      const libraryGroup = el('div', 'skill-group')
       for (const skill of library) {
         const card = el('div', 'card')
         const grow = el('div', 'grow')
@@ -1110,9 +1143,10 @@
         remove.addEventListener('click', () => { void removeLibrarySkill(skill) })
         actions.append(remove)
         card.append(actions)
-        list.append(card)
+        libraryGroup.append(card)
       }
-      const groupHost = el('div', null)
+      if (libraryGroup.childElementCount > 0) list.append(libraryGroup)
+      const groupHost = el('div', 'skill-group')
       list.append(groupHost)
       skillState.groupHost = groupHost
       renderSkillGroups(groups)
@@ -1278,6 +1312,9 @@
         grow.append(el('div', 'summary', skill.id))
         grow.append(el('div', 'summary', '安装量：' + installsText(skill.installs)))
         const actions = el('div', 'actions')
+        const install = el('button', 'small primary', '安装')
+        install.addEventListener('click', () => { void installFromMarket(skill.id) })
+        actions.append(install)
         const view = el('button', 'small', '详情')
         view.addEventListener('click', () => { void showMarketDetail(skill.id) })
         actions.append(view)
@@ -1296,7 +1333,7 @@
         return
       }
       setStatus('正在搜索 skills.sh…')
-      $('marketDetail').hidden = true
+      closeMarketDetail()
       $('marketResults').replaceChildren()
       try {
         const result = await api.marketSearch(query, 60)
@@ -1310,7 +1347,8 @@
 
     async function showMarketDetail(id) {
       const box = $('marketDetail')
-      box.hidden = false
+      const dialog = $('marketDetailDialog')
+      if (!dialog.open) dialog.showModal()
       box.replaceChildren(el('div', 'empty', '正在读取详情…'))
       try {
         const detail = await api.marketDetail(id)
@@ -1351,8 +1389,19 @@
 
     function closeMarketDetail() {
       marketDetail = null
-      $('marketDetail').hidden = true
+      const dialog = $('marketDetailDialog')
+      if (dialog.open) dialog.close()
       $('marketDetail').replaceChildren()
+    }
+
+    async function installFromMarket(id) {
+      try {
+        const detail = await api.marketDetail(id)
+        closeMarketDetail()
+        openInstallDialog(detail)
+      } catch (error) {
+        setStatus('读取安装信息失败：' + String(error), 'error')
+      }
     }
 
     let installDetail = null
@@ -1365,7 +1414,6 @@
         { kind: 'global', root: 'agents', label: '全局 · .agents/skills' },
       ]
       for (const workspace of skillState.workspaces || []) {
-        installTargets.push({ kind: 'project', root: 'dsh', projectRoot: workspace.path, label: workspace.title + ' · .dsh/skills' })
         installTargets.push({ kind: 'project', root: 'agents', projectRoot: workspace.path, label: workspace.title + ' · .agents/skills' })
       }
       const select = $('installScope')

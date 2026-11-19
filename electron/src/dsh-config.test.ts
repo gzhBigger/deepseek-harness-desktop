@@ -497,6 +497,31 @@ test('skill scopes expose both global roots and project roots, and publish into 
   assert.equal(existsSync(join(libraryRoot, 'scoped-skill')), false)
 })
 
+test('removeSkillEntry removes only a managed link or directory', () => {
+  const home = join(root, 'remove-entry-home')
+  const libraryRoot = join(home, 'shell-library')
+  const skillsRoot = join(home, 'skills')
+  const source = join(root, 'remove-entry-source')
+  const outside = join(root, 'remove-entry-outside')
+  mkdirSync(source, { recursive: true })
+  mkdirSync(outside, { recursive: true })
+  mkdirSync(skillsRoot, { recursive: true })
+  writeFileSync(join(source, 'SKILL.md'), '---\nname: linked-skill\ndescription: linked\n---\n', 'utf8')
+  writeFileSync(join(outside, 'SKILL.md'), '---\nname: outside\ndescription: outside\n---\n', 'utf8')
+  symlinkSync(source, join(skillsRoot, 'linked-skill'), 'junction')
+  mkdirSync(join(skillsRoot, 'real-skill'))
+  writeFileSync(join(skillsRoot, 'real-skill', 'SKILL.md'), '---\nname: real-skill\ndescription: real\n---\n', 'utf8')
+
+  const store = createDshConfigStore({ home, libraryRoot })
+  assert.equal(store.removeSkillEntry(join(skillsRoot, 'linked-skill')).ok, true)
+  assert.equal(existsSync(join(skillsRoot, 'linked-skill')), false)
+  assert.equal(existsSync(join(source, 'SKILL.md')), true, 'removing a link keeps its target')
+  assert.equal(store.removeSkillEntry(join(skillsRoot, 'real-skill')).ok, true)
+  assert.equal(existsSync(join(skillsRoot, 'real-skill')), false)
+  assert.equal(store.removeSkillEntry(outside).ok, false, 'an outside path is refused')
+  assert.equal(existsSync(join(outside, 'SKILL.md')), true)
+})
+
 test('a broken patch file is reported instead of overwritten', () => {
   const home = join(root, 'broken-home')
   const profile = join(home, 'profiles', 'dsh-desktop')

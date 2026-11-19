@@ -166,6 +166,7 @@ if (isMcpDocument()) {
     addSkill: () => ipcRenderer.invoke(IPC.mcpAddSkill) as Promise<unknown>,
     removeSkill: (name: unknown) => ipcRenderer.invoke(IPC.mcpRemoveSkill, name) as Promise<unknown>,
     removeLibrarySkill: (name: unknown) => ipcRenderer.invoke(IPC.mcpRemoveLibrarySkill, name) as Promise<unknown>,
+    removeSkillEntry: (path: unknown) => ipcRenderer.invoke(IPC.mcpRemoveSkillEntry, path) as Promise<unknown>,
     importSkill: () => ipcRenderer.invoke(IPC.mcpImportSkill) as Promise<unknown>,
     publishSkill: (name: unknown, target: unknown) => ipcRenderer.invoke(IPC.mcpPublishSkill, name, target) as Promise<unknown>,
     unpublishSkill: (name: unknown, target: unknown) => ipcRenderer.invoke(IPC.mcpUnpublishSkill, name, target) as Promise<unknown>,

@@ -175,6 +175,8 @@ export interface DshConfigStore {
   listSkillPublications(): readonly SkillPublication[]
   addSkillLink(directory: string, name?: string): ConfigResult
   removeSkillLink(name: string): ConfigResult
+  /** Remove one discovered Skill entry (link only for links; the directory itself for real bundles). */
+  removeSkillEntry(path: string): ConfigResult
   /** One-shot migration of the legacy plugin's MCP records and links. Idempotent. */
   migrateLegacy(): MigrationResult
   /** The QR-login cookie/settings the ONE-WAY plugin stored in its row, for the usage window. */
@@ -769,6 +771,26 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
     writeFileSync(publicationsFile, `${JSON.stringify(items, null, 2)}\n`, 'utf8')
   }
 
+  const removeSkillEntry = (path: string): ConfigResult => {
+    const target = resolve(path)
+    const parent = dirname(target)
+    if (!listSkillScopes().some((group) => resolve(group.path) === parent)) {
+      return { ok: false, reason: '这个路径不在壳管理的 Skill 目录里，已拒绝。' }
+    }
+    try {
+      const info = lstatSync(target)
+      if (info.isSymbolicLink()) unlinkSync(target)
+      else if (info.isDirectory()) rmSync(target, { recursive: true, force: false })
+      else unlinkSync(target)
+    } catch (error) {
+      return { ok: false, reason: `删除失败：${String(error)}` }
+    }
+    const publications = readPublications()
+    const kept = publications.filter((item) => resolve(item.target).toLowerCase() !== target.toLowerCase())
+    if (kept.length !== publications.length) writePublications(kept)
+    return { ok: true }
+  }
+
   const listLibrarySkills = (): readonly SkillEntry[] => {
     const out: SkillEntry[] = []
     let entries: string[]
@@ -1006,6 +1028,7 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
     listSkillPublications,
     addSkillLink,
     removeSkillLink,
+    removeSkillEntry,
     migrateLegacy,
     readLegacyUsageConfig,
     removeRows,

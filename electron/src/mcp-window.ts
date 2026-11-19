@@ -493,6 +493,11 @@ export class McpWindow {
       if (typeof name !== 'string') return { ok: false, reason: 'Skill 名称无效。' }
       return store.removeLibrarySkill(name)
     })
+    ipcMain.handle(IPC.mcpRemoveSkillEntry, (event, path: unknown) => {
+      guard(event)
+      if (typeof path !== 'string') return { ok: false, reason: 'Skill 路径无效。' }
+      return store.removeSkillEntry(path)
+    })
     ipcMain.handle(IPC.mcpImportSkill, async (event) => {
       guard(event)
       const owner = BrowserWindow.fromWebContents(event.sender)
@@ -550,6 +555,7 @@ export class McpWindow {
       const root = record['root'] === 'agents' ? 'agents' : 'dsh'
       let projectRoot: string | undefined
       if (kind === 'project') {
+        if (root !== 'agents') return { ok: false, reason: '项目 Skill 只安装到 .agents/skills。' }
         if (typeof record['projectRoot'] !== 'string' || record['projectRoot'] === '') {
           return { ok: false, reason: '请选择要安装到的项目。' }
         }

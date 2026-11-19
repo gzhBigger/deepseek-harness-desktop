@@ -356,6 +356,7 @@ export const IPC = {
   mcpAddSkill: 'shell:mcp-add-skill',
   mcpRemoveSkill: 'shell:mcp-remove-skill',
   mcpRemoveLibrarySkill: 'shell:mcp-remove-library-skill',
+  mcpRemoveSkillEntry: 'shell:mcp-remove-skill-entry',
   mcpImportSkill: 'shell:mcp-import-skill',
   mcpPublishSkill: 'shell:mcp-publish-skill',
   mcpUnpublishSkill: 'shell:mcp-unpublish-skill',

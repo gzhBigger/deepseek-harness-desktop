@@ -14,13 +14,13 @@ Skill 的管理原先分散在两处：DSH 的 profile 只认 `$DSH_HOME/skills`
 
 1. **本地库**：Skill 源文件放在壳自己的配置目录 `bridgeDir()/skills`（开发态是 `ai.deepseek.dsh-desktop.dev\skills`，安装态是 `ai.deepseek.dsh-desktop\skills`）。本地库只复制目录，不执行其中的脚本；目录下必须有 `SKILL.md`，frontmatter 的 `name` / `description` 用于展示。未发布的副本可从本地库删除；仍有发布链接时删除会被拒绝，必须先取消发布。
 2. **发布**：发布到全局时在 `$DSH_HOME/skills/<name>` 建 junction，发布到项目时在 `<project>/.dsh/skills/<name>` 建 junction，指向壳本地库。发布只登记 `<libraryRoot>/.publications.json`，取消发布只删登记过且 realpath 仍落在本地库里的链接；不复制、不删除源文件。
-3. **市场**：第三个 tab「Skill 市场」访问 skills.sh。搜索走公开 `https://www.skills.sh/api/search?q=...&limit=...`，详情抓 `https://www.skills.sh/<owner>/<repo>/<skill>` 的服务端 HTML，解析描述、安装命令、仓库、安装量和 Stars；不在主进程里调用需要 Vercel OIDC 的 `/api/v1/*`。市场支持一键安装：安装时选择全局/项目与 `.dsh`/`.agents`，先从 GitHub 下载技能目录到临时目录，再复制进壳本地库并发布 junction；不执行第三方脚本。
+3. **市场**：第三个 tab「Skill 市场」访问 skills.sh。搜索走公开 `https://www.skills.sh/api/search?q=...&limit=...`，详情抓 `https://www.skills.sh/<owner>/<repo>/<skill>` 的服务端 HTML，解析描述、安装命令、仓库、安装量和 Stars；不在主进程里调用需要 Vercel OIDC 的 `/api/v1/*`。市场支持一键安装：安装时全局可选 `.dsh`/`.agents`，项目统一落在 `.agents/skills`（项目内不再区分 `.dsh`）。先从 GitHub 下载技能目录到临时目录，再复制进壳本地库并发布 junction；不执行第三方脚本。已安装列表按 `全部/全局/各项目` 筛选，全局再分 `.dsh`/`.agents`。
 
 边界：
 
-- IPC 只新增 `mcpImportSkill` / `mcpPublishSkill` / `mcpUnpublishSkill` / `mcpSkillMarketSearch` / `mcpSkillMarketDetail` / `mcpOpenExternal`；`openExternal` 只接受 skills.sh。
+- IPC 新增 `mcpImportSkill` / `mcpPublishSkill` / `mcpUnpublishSkill` / `mcpRemoveSkillEntry` / `mcpSkillMarketSearch` / `mcpSkillMarketDetail` / `mcpSkillMarketInstall` / `mcpOpenExternal`；`openExternal` 只接受 skills.sh。已安装条目可直接删除：链接只删链接，真实目录需要强确认。市场详情使用原生 `<dialog>` 模态，而不是页面底部的展开块。
 - 市场请求 15 秒超时、响应上限 2 MiB，id 必须是严格的 `owner/repo/skill`，拒绝空段、`.`、`..`。
-- 导入和发布都是用户显式动作；项目发布用目录选择器，不接受渲染进程传入任意项目路径。
+- 导入、安装和发布都是用户显式动作；项目安装只能从 `workspaceRegistry` 的项目列表选择，不接受渲染进程传入任意项目路径。
 
 ## Alternatives considered
 
@@ -35,7 +35,7 @@ Skill 的管理原先分散在两处：DSH 的 profile 只认 `$DSH_HOME/skills`
 - 本地库是壳的私有数据，升级/重装壳不应清空；项目发布依赖 DSH 对 `.dsh/skills` / `.agents/skills` 的扫描，重启或刷新后生效。
 - skills.sh 的公开搜索和详情 HTML 不是版本化契约，页面结构变化会让市场详情退化；已装 Skill 不受影响。
 - 发布链接只建立 junction；删除本地库目录会让已发布链接失效，UI 的取消发布只负责删链接和登记。
-- 全局发布同时支持 `$DSH_HOME/skills`（`.dsh`）与 `~/.agents/skills`（`.agents`）；项目发布同样支持 `.dsh/skills` 与 `.agents/skills`，旧 publication 没有 `root` 时按 `.dsh` 处理。
+- 全局发布/安装同时支持 `$DSH_HOME/skills`（`.dsh`）与 `~/.agents/skills`（`.agents`）；项目发布仍支持 `.dsh/skills` 与 `.agents/skills`，但市场一键安装到项目时只写 `.agents/skills`。旧 publication 没有 `root` 时按 `.dsh` 处理。
 - 市场安装会先下载到本地库，再按选择发布；同一 Skill 安装到多个作用域时复用本地库副本，取消其中一个发布不影响另一个。删除本地库目录会让已有发布链接失效。
 - 测试窗口里的 `msm-ui-test` 是临时验证数据，验证后已从 dev 库、全局 junction 和 publications 中清理。
 
@@ -44,5 +44,5 @@ Skill 的管理原先分散在两处：DSH 的 profile 只认 `$DSH_HOME/skills`
 - `electron/src/dsh-config.test.ts`：导入复制、重名拒绝、global/project junction、取消单个 publication 不影响另一个、非 publication 链接拒绝；新增作用域列表、`.agents` 根、旧 publication 缺少 `root` 的归一化。
 - `electron/src/skill-market.test.ts`：详情 HTML 解析、非法 id、搜索坏行、短 query、注入 fetch 的详情读取；新增 mock GitHub 下载成功、符号链接拒绝、文件数/大小上限。
 - `electron/src/mcp-ui.test.ts` / `mcp-window.test.ts`：三 tab、元素 id、bridge 方法、shell stub；新增 scope pills、发布/安装弹窗、`marketInstall`。
-- 全量 `npm test`：76 个测试文件，675 pass / 8 skipped；`npm run typecheck`、`npm run build` 通过。
-- 真实窗口：搜索 `react` 返回 58 条，详情显示 `912.8K` / `34.5K` 和可复制的官方命令；本地库卡片导入、发布到全局 junction、取消发布均已手工验证。新增安装选择 `.dsh`/`.agents` 与项目作用域，并把 `find-skills` 安装到项目 `.dsh/skills`、取消发布、清理本地库与项目链接。
+- 全量 `npm test`：76 个测试文件，676 pass / 8 skipped；`npm run typecheck`、`npm run build` 通过。
+- 真实窗口：搜索 `react` 返回 58 条，详情在模态 dialog 中显示 `912.8K` / `34.5K` 和可复制的官方命令；Skills 页 scope pills 计数与分组正确，已安装卡片有删除入口；本地库导入、发布到全局 junction、取消发布均已手工验证。安装作用域为全局 `.dsh`/`.agents` + 项目 `.agents`。此前已用 `find-skills` 验证项目 `.dsh` 安装、取消发布和清理链路；项目 `.agents` 选项已在真实安装弹窗确认，但没有再实际落盘。
