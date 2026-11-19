@@ -39,10 +39,19 @@ Skill 的管理原先分散在两处：DSH 的 profile 只认 `$DSH_HOME/skills`
 - 市场安装会先下载到本地库，再按选择发布；同一 Skill 安装到多个作用域时复用本地库副本，取消其中一个发布不影响另一个。删除本地库目录会让已有发布链接失效。
 - 测试窗口里的 `msm-ui-test` 是临时验证数据，验证后已从 dev 库、全局 junction 和 publications 中清理。
 
+## Version checks
+
+本地库副本的来源记录在 `<libraryRoot>/.sources/<sha256(name) 前 16 位>.json`：仓库、Skill 相对路径、分支、安装时 commit、frontmatter 版本号。前端只读 `SKILL.md`，来源元数据与副本分离，删除本地副本时一起清理。
+
+- **检查更新**：只对有来源记录的副本，逐个查询 GitHub 的 commits API（`path` + `branch`）；没有来源的旧副本明确显示「来源未记录」，不把未知当新版。
+- **更新**：重新走同一条下载校验路径，先落到临时目录；只有新 commit 与记录不同才替换本地库。替换采用 staging → backup → rename，失败回滚；保留原来的发布 junction，所以全局/项目链接不需要重建。
+- **为什么不自动更新**：更新会改变进入模型上下文的 Skill 正文，必须在用户点「更新」后发生；市场当前只按 commit 判断是否有新内容，不根据 `version` 字段做语义版本比较，因为没有强制的版本规范。
+- **信任边界不变**：更新和安装都不执行脚本；下载仍受 500 文件 / 8 MiB 总大小 / 1 MiB 单文件限制，拒绝 symlink 与 `..`。
+
 ## Testing
 
-- `electron/src/dsh-config.test.ts`：导入复制、重名拒绝、global/project junction、取消单个 publication 不影响另一个、非 publication 链接拒绝；新增作用域列表、`.agents` 根、旧 publication 缺少 `root` 的归一化。
+- `electron/src/dsh-config.test.ts`：导入复制、重名拒绝、global/project junction、取消单个 publication 不影响另一个、非 publication 链接拒绝；作用域列表、`.agents` 根、旧 publication 缺少 `root` 的归一化；来源元数据在 `replaceLibrarySkill` 后更新、删除副本时清理。
 - `electron/src/skill-market.test.ts`：详情 HTML 解析、非法 id、搜索坏行、短 query、注入 fetch 的详情读取；新增 mock GitHub 下载成功、符号链接拒绝、文件数/大小上限。
-- `electron/src/mcp-ui.test.ts` / `mcp-window.test.ts`：三 tab、元素 id、bridge 方法、shell stub；新增 scope pills、发布/安装弹窗、`marketInstall`。
-- 全量 `npm test`：76 个测试文件，676 pass / 8 skipped；`npm run typecheck`、`npm run build` 通过。
+- `electron/src/mcp-ui.test.ts` / `mcp-window.test.ts`：三 tab、元素 id、bridge 方法、shell stub；新增 scope pills、本地库独立筛选、版本/更新按钮、发布/安装弹窗、`marketInstall`、`checkSkillUpdates`/`updateSkill`。
+- 全量 `npm test`：76 个测试文件，677 pass / 8 skipped；`npm run typecheck`、`npm run build` 通过。
 - 真实窗口：搜索 `react` 返回 58 条，详情在模态 dialog 中显示 `912.8K` / `34.5K` 和可复制的官方命令；Skills 页 scope pills 计数与分组正确，已安装卡片有删除入口；本地库导入、发布到全局 junction、取消发布均已手工验证。安装作用域为全局 `.dsh`/`.agents` + 项目 `.agents`。此前已用 `find-skills` 验证项目 `.dsh` 安装、取消发布和清理链路；项目 `.agents` 选项已在真实安装弹窗确认，但没有再实际落盘。

@@ -49,6 +49,7 @@ export interface SkillMarketDetail {
 export interface SkillMarketOptions {
   readonly limit?: number
   readonly fetchTextImpl?: (url: string, timeoutMs: number) => Promise<string>
+  readonly fetchJsonImpl?: (url: string, timeoutMs: number) => Promise<unknown>
 }
 
 function decodeEntities(value: string): string {
@@ -182,6 +183,13 @@ export interface SkillInstallResult {
   readonly directory: string
   readonly name: string
   readonly files: number
+  readonly sourceId: string
+  readonly repository: string
+  readonly path: string
+  readonly branch: string
+  /** Empty when GitHub did not return a commit; the UI then treats the version as unknown. */
+  readonly commit: string
+  readonly version?: string
 }
 
 interface GithubTreeEntry {
@@ -240,6 +248,34 @@ function skillNameFromMarkdown(text: string): string {
   return name?.[1]?.trim() ?? ''
 }
 
+function skillVersionFromMarkdown(text: string): string | undefined {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/u.exec(text)
+  if (match === null) return undefined
+  const version = /^version\s*:\s*["']?([^"'\r\n]+)["']?\s*$/mu.exec(match[1] ?? '')
+  const value = version?.[1]?.trim()
+  return value === undefined || value === '' ? undefined : value
+}
+
+/** Latest commit touching one directory; one GitHub API call per Skill check. */
+export async function latestSkillCommit(
+  repository: string,
+  path: string,
+  branch: string,
+  options: SkillMarketOptions = {},
+): Promise<string> {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error('无效的 Skill 仓库。')
+  if (path === '' || path.split('/').includes('..')) throw new Error('无效的 Skill 目录。')
+  const url = new URL(`/repos/${repository}/commits`, 'https://api.github.com')
+  url.searchParams.set('path', path)
+  url.searchParams.set('sha', branch)
+  url.searchParams.set('per_page', '1')
+  const payload = await (options.fetchJsonImpl ?? fetchJson)(url.toString(), 15_000)
+  const list = Array.isArray(payload) ? payload : []
+  const first = list[0]
+  if (typeof first !== 'object' || first === null || Array.isArray(first)) return ''
+  return typeof (first as Record<string, unknown>)['sha'] === 'string' ? String((first as Record<string, unknown>)['sha']) : ''
+}
+
 function candidateDirectories(paths: readonly GithubTreeEntry[], skillId: string): string[] {
   const dirs: string[] = []
   for (const entry of paths) {
@@ -290,6 +326,7 @@ export async function downloadSkillFromGithub(id: string, options: SkillMarketOp
   if (candidates.length === 0) throw new Error('GitHub 仓库里没有找到 SKILL.md。')
   let chosen = ''
   let chosenName = skillId
+  let chosenText = ''
   for (const dir of candidates.slice(0, 12)) {
     const raw = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(branch)}/${dir.split('/').map(encodeURIComponent).join('/')}/SKILL.md`
     const text = (await fetchBytes(raw, 15_000)).toString('utf8')
@@ -297,14 +334,23 @@ export async function downloadSkillFromGithub(id: string, options: SkillMarketOp
     if (name !== '' && (name === skillId || name.toLowerCase() === skillId.toLowerCase())) {
       chosen = dir
       chosenName = name
+      chosenText = text
       break
     }
     if (chosen === '') {
       chosen = dir
       chosenName = name !== '' ? name : skillId
+      chosenText = text
     }
   }
   if (chosen === '') throw new Error('GitHub 仓库里没有找到可安装的 Skill。')
+  let commit = ''
+  try {
+    commit = await latestSkillCommit(`${owner}/${repo}`, chosen, branch, options)
+  } catch {
+    // Version checks are an enhancement: a missing GitHub commit must not block installation.
+  }
+  const version = skillVersionFromMarkdown(chosenText)
   const prefix = `${chosen}/`
   const files = blobs.filter((entry) => entry.type === 'blob' && entry.path.startsWith(prefix) && !entry.path.slice(prefix.length).split('/').includes('..'))
   if (files.length === 0) throw new Error('技能目录为空。')
@@ -335,7 +381,17 @@ export async function downloadSkillFromGithub(id: string, options: SkillMarketOp
       await writeFile(destination, bytes)
     }
     if (!existsSync(join(directory, 'SKILL.md'))) throw new Error('下载结果缺少 SKILL.md。')
-    return { directory, name: chosenName, files: files.length }
+    return {
+      directory,
+      name: chosenName,
+      files: files.length,
+      sourceId: clean,
+      repository: `${owner}/${repo}`,
+      path: chosen,
+      branch,
+      commit,
+      ...(version === undefined ? {} : { version }),
+    }
   } catch (error) {
     await rm(directory, { recursive: true, force: true })
     throw error

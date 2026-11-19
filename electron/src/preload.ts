@@ -173,6 +173,8 @@ if (isMcpDocument()) {
     marketSearch: (query: unknown, limit: unknown) => ipcRenderer.invoke(IPC.mcpSkillMarketSearch, query, limit) as Promise<unknown>,
     marketDetail: (id: unknown) => ipcRenderer.invoke(IPC.mcpSkillMarketDetail, id) as Promise<unknown>,
     marketInstall: (id: unknown, target: unknown) => ipcRenderer.invoke(IPC.mcpSkillMarketInstall, id, target) as Promise<unknown>,
+    checkSkillUpdates: () => ipcRenderer.invoke(IPC.mcpSkillCheckUpdates) as Promise<unknown>,
+    updateSkill: (name: unknown) => ipcRenderer.invoke(IPC.mcpSkillUpdate, name) as Promise<unknown>,
     openExternal: (url: unknown) => ipcRenderer.invoke(IPC.mcpOpenExternal, url) as Promise<unknown>,
     restart: () => ipcRenderer.invoke(IPC.mcpRestart) as Promise<unknown>,
     close: () => ipcRenderer.invoke(IPC.mcpClose) as Promise<boolean>,

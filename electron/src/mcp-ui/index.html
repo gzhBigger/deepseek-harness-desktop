@@ -207,6 +207,7 @@
     <section class="panel" id="panelSkills">
       <div class="toolbar">
         <button type="button" class="primary" id="importSkill">添加到本地库</button>
+        <button type="button" id="checkSkillUpdates">检查更新</button>
         <button type="button" id="refreshSkills">刷新</button>
         <span class="path" id="skillsRoot"></span>
       </div>
@@ -974,7 +975,7 @@
       }
     }
 
-    let skillState = { libraryRoot: '', publications: [], groups: [], scope: 'all' }
+    let skillState = { libraryRoot: '', publications: [], groups: [], library: [], scope: 'all', updates: {}, checking: false, updating: '' }
 
     function samePath(left, right) {
       return String(left || '').toLowerCase() === String(right || '').toLowerCase()
@@ -994,7 +995,7 @@
       return group.kind === 'project' && projectScopeKey(group.projectRoot) === scope
     }
 
-    function renderSkillScopes(groups) {
+    function renderSkillScopes(groups, library) {
       const bar = $('skillScopes')
       bar.replaceChildren()
       const projects = new Map()
@@ -1012,12 +1013,12 @@
         button.classList.toggle('active', skillState.scope === key)
         button.addEventListener('click', () => {
           skillState.scope = key
-          renderSkillScopes(groups)
-          renderSkillGroups(groups)
+          renderSkills(skillState)
         })
         bar.append(button)
       }
       add('all', '全部', allCount)
+      add('library', '本地库', library.length)
       add('global', '全局', globalCount)
       for (const [key, title] of projects) {
         let count = 0
@@ -1093,64 +1094,138 @@
         libraryRoot: (state && state.libraryRoot) || '',
         publications,
         groups,
+        library,
         workspaces: (state && state.workspaces) || [],
-        scope: skillState.scope,
+        scope: skillState.scope || 'all',
+        updates: skillState.updates || {},
+        checking: Boolean(skillState.checking),
+        updating: skillState.updating || '',
       }
       $('libraryHint').textContent = state && state.libraryRoot
         ? '本地库：' + state.libraryRoot + '。发布只创建指向本地库的 junction，不复制源文件。'
         : ''
-      renderSkillScopes(groups)
+      renderSkillScopes(groups, library)
       const list = $('skillList')
       list.replaceChildren()
-      if (library.length > 0) {
+      if (skillState.scope === 'library') {
+        if (library.length === 0) {
+          list.append(el('div', 'empty', '本地 Skill 库还是空的；可以从市场安装或点「添加到本地库」。'))
+          return
+        }
         const head = el('div', 'scope-head')
         head.append(el('span', null, '本地库（未发布）'))
+        head.append(tag('独立于已安装 Skill'))
         list.append(head)
-      }
-      const libraryGroup = el('div', 'skill-group')
-      for (const skill of library) {
-        const card = el('div', 'card')
-        const grow = el('div', 'grow')
-        const name = el('div', 'name', skill.name)
-        name.append(tag('本地库'))
-        grow.append(name)
-        if (skill.description) grow.append(el('div', 'desc', skill.description))
-        grow.append(el('div', 'summary', skill.path))
-        const pubs = publications.filter((item) => samePath(item.name, skill.name))
-        for (const pub of pubs) {
-          const row = el('div', 'publication')
-          const root = skillRootLabel(pub.root)
-          row.append(el('span', null, (pub.kind === 'global' ? '已发布到全局' : '已发布到项目') + ' · ' + root + '：'))
-          row.append(el('code', null, pub.target))
-          const undo = el('button', 'small danger', '取消发布')
-          undo.addEventListener('click', () => { void unpublishSkill(pub) })
-          row.append(undo)
-          grow.append(row)
+        const libraryGroup = el('div', 'skill-group')
+        for (const skill of library) {
+          const card = el('div', 'card')
+          const grow = el('div', 'grow')
+          const name = el('div', 'name', skill.name)
+          name.append(tag('本地库'))
+          const update = skillState.updates[skill.name]
+          if (update && update.updateAvailable) name.append(tag('可更新', 'ok'))
+          grow.append(name)
+          if (skill.description) grow.append(el('div', 'desc', skill.description))
+          grow.append(el('div', 'summary', skill.path))
+          const source = skill.source
+          const version = skill.version || (source && source.version) || (source && source.commit ? source.commit.slice(0, 8) : '')
+          const sourceRow = el('div', 'summary')
+          sourceRow.textContent = source
+            ? '来源：' + source.id + ' · 版本 ' + (version || '未标注') + (source.commit ? ' · ' + source.commit.slice(0, 8) : '')
+            : '版本 ' + (version || '未标注') + ' · 来源未记录（重新从市场安装后可检查更新）'
+          grow.append(sourceRow)
+          if (update) {
+            if (update.error) grow.append(el('div', 'desc', '检查更新失败：' + update.error))
+            else if (update.updateAvailable) grow.append(el('div', 'desc', '有新版本：' + (update.latest || '未知') + ' → 可更新'))
+            else grow.append(el('div', 'desc', '已是最新版本。'))
+          }
+          const pubs = publications.filter((item) => samePath(item.name, skill.name))
+          for (const pub of pubs) {
+            const row = el('div', 'publication')
+            const root = skillRootLabel(pub.root)
+            row.append(el('span', null, (pub.kind === 'global' ? '已发布到全局' : '已发布到项目') + ' · ' + root + '：'))
+            row.append(el('code', null, pub.target))
+            const undo = el('button', 'small danger', '取消发布')
+            undo.addEventListener('click', () => { void unpublishSkill(pub) })
+            row.append(undo)
+            grow.append(row)
+          }
+          card.append(grow)
+          const actions = el('div', 'actions')
+          for (const root of ['dsh', 'agents']) {
+            const global = el('button', 'small', '发布到全局 · ' + skillRootLabel(root))
+            global.addEventListener('click', () => { void publishSkill(skill, 'global', root) })
+            actions.append(global)
+          }
+          const project = el('button', 'small', '发布到项目…')
+          project.addEventListener('click', () => { void publishSkill(skill, 'project', 'dsh') })
+          actions.append(project)
+          if (update && update.updateAvailable) {
+            const updateButton = el('button', 'small primary', skillState.updating === skill.name ? '更新中…' : '更新')
+            updateButton.disabled = skillState.updating !== ''
+            updateButton.addEventListener('click', () => { void updateSkill(skill) })
+            actions.append(updateButton)
+          }
+          const remove = el('button', 'small danger', '从本地库删除')
+          remove.disabled = pubs.length > 0
+          remove.title = pubs.length > 0 ? '请先取消所有发布，再删除本地库副本。' : '删除本地库里的这份 Skill 源文件。'
+          remove.addEventListener('click', () => { void removeLibrarySkill(skill) })
+          actions.append(remove)
+          card.append(actions)
+          libraryGroup.append(card)
         }
-        card.append(grow)
-        const actions = el('div', 'actions')
-        for (const root of ['dsh', 'agents']) {
-          const global = el('button', 'small', '发布到全局 · ' + skillRootLabel(root))
-          global.addEventListener('click', () => { void publishSkill(skill, 'global', root) })
-          actions.append(global)
-        }
-        const project = el('button', 'small', '发布到项目…')
-        project.addEventListener('click', () => { void publishSkill(skill, 'project', 'dsh') })
-        actions.append(project)
-        const remove = el('button', 'small danger', '从本地库删除')
-        remove.disabled = pubs.length > 0
-        remove.title = pubs.length > 0 ? '请先取消所有发布，再删除本地库副本。' : '删除本地库里的这份 Skill 源文件。'
-        remove.addEventListener('click', () => { void removeLibrarySkill(skill) })
-        actions.append(remove)
-        card.append(actions)
-        libraryGroup.append(card)
+        list.append(libraryGroup)
+        return
       }
-      if (libraryGroup.childElementCount > 0) list.append(libraryGroup)
       const groupHost = el('div', 'skill-group')
       list.append(groupHost)
       skillState.groupHost = groupHost
       renderSkillGroups(groups)
-    }    async function loadSkills() {
+    }
+
+    async function checkSkillUpdates() {
+      if (skillState.checking) return
+      skillState.checking = true
+      renderSkills(skillState)
+      try {
+        const result = await api.checkSkillUpdates()
+        const items = (result && Array.isArray(result.items)) ? result.items : []
+        const updates = {}
+        for (const item of items) if (item && typeof item.name === 'string') updates[item.name] = item
+        skillState.updates = updates
+        const pending = items.filter((item) => item && item.updateAvailable).length
+        setStatus(pending > 0 ? '发现 ' + pending + ' 个可更新的 Skill。' : '本地库里的 Skill 都是最新版本。', 'ok')
+      } catch (error) {
+        setStatus('检查更新失败：' + String(error), 'error')
+      } finally {
+        skillState.checking = false
+        renderSkills(skillState)
+      }
+    }
+
+    async function updateSkill(skill) {
+      if (skillState.updating !== '') return
+      skillState.updating = skill.name
+      renderSkills(skillState)
+      try {
+        const result = await api.updateSkill(skill.name)
+        if (!result || result.ok !== true) {
+          setStatus((result && result.reason) || '更新失败。', 'error')
+          return
+        }
+        setStatus(result.updated === true ? '已更新：' + skill.name : '已经是最新版本。', 'ok')
+        skillState.updates = {}
+        await loadSkills()
+        await checkSkillUpdates()
+      } catch (error) {
+        setStatus('更新失败：' + String(error), 'error')
+      } finally {
+        skillState.updating = ''
+        renderSkills(skillState)
+      }
+    }
+
+    async function loadSkills() {
       try {
         const state = await api.skills()
         $('skillsRoot').textContent = (state && state.skillsRoot) || ''
@@ -1552,6 +1627,7 @@
       $('cancelServer').addEventListener('click', hideForm)
       $('saveServer').addEventListener('click', () => { void saveServer() })
       $('importSkill').addEventListener('click', () => { void importSkill() })
+      $('checkSkillUpdates').addEventListener('click', () => { void checkSkillUpdates() })
       $('refreshSkills').addEventListener('click', () => { void loadSkills() })
       $('marketSearch').addEventListener('click', () => { void searchMarket() })
       $('marketQuery').addEventListener('keydown', (event) => {

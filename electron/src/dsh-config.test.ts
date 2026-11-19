@@ -13,7 +13,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
@@ -454,6 +454,41 @@ test('a library skill is copied once, then published as a removable junction', (
   symlinkSync(outside, outsideLink, 'junction')
   assert.equal(store.unpublishSkill('outside', outsideLink).ok, false, 'a non-publication link is refused')
   assert.equal(existsSync(outsideLink), true)
+})
+
+test('a library skill keeps its source metadata across updates', () => {
+  const home = join(root, 'source-home')
+  const libraryRoot = join(home, 'shell-library')
+  const source = join(root, 'source-v1')
+  const next = join(root, 'source-v2')
+  mkdirSync(source, { recursive: true })
+  mkdirSync(next, { recursive: true })
+  writeFileSync(join(source, 'SKILL.md'), '---\nname: source-skill\ndescription: v1\nversion: 1.0.0\n---\n', 'utf8')
+  writeFileSync(join(next, 'SKILL.md'), '---\nname: source-skill\ndescription: v2\nversion: 2.0.0\n---\n', 'utf8')
+  const store = createDshConfigStore({ home, libraryRoot })
+  assert.equal(store.importSkill(source, 'source-skill').ok, true)
+  const marker = {
+    id: 'owner/repo/source-skill',
+    repository: 'owner/repo',
+    path: 'skills/source-skill',
+    branch: 'main',
+    commit: 'a'.repeat(40),
+    version: '1.0.0',
+  }
+  assert.equal(store.setLibrarySource('source-skill', marker).ok, true)
+  const before = store.listLibrarySkills()[0]
+  assert.equal(before?.version, '1.0.0')
+  assert.equal(before?.source?.commit, marker.commit)
+
+  const nextMarker = { ...marker, commit: 'b'.repeat(40), version: '2.0.0' }
+  assert.equal(store.replaceLibrarySkill('source-skill', next, nextMarker).ok, true)
+  const after = store.listLibrarySkills()[0]
+  assert.equal(after?.description, 'v2')
+  assert.equal(after?.version, '2.0.0')
+  assert.equal(after?.source?.commit, nextMarker.commit)
+
+  assert.equal(store.removeLibrarySkill('source-skill').ok, true)
+  assert.deepEqual(readdirSync(join(libraryRoot, '.sources')), [], 'removing the copy drops its source record too')
 })
 
 test('skill scopes expose both global roots and project roots, and publish into the chosen root', () => {

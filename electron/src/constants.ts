@@ -363,6 +363,8 @@ export const IPC = {
   mcpSkillMarketSearch: 'shell:mcp-skill-market-search',
   mcpSkillMarketDetail: 'shell:mcp-skill-market-detail',
   mcpSkillMarketInstall: 'shell:mcp-skill-market-install',
+  mcpSkillCheckUpdates: 'shell:mcp-skill-check-updates',
+  mcpSkillUpdate: 'shell:mcp-skill-update',
   mcpOpenExternal: 'shell:mcp-open-external',
   mcpRestart: 'shell:mcp-restart',
   mcpClose: 'shell:mcp-close',

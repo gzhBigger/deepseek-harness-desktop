@@ -13,7 +13,7 @@ import { readFile, rm, stat } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 
 import { IPC, SHELL_PAGE_DOCUMENTS } from './constants.ts'
-import type { DshConfigStore, McpServer, McpServerInput, McpTransport } from './dsh-config.ts'
+import type { DshConfigStore, McpServer, McpServerInput, McpTransport, SkillSource } from './dsh-config.ts'
 import {
   MAX_IMPORT_ENTRIES,
   MAX_IMPORT_FILE_BYTES,
@@ -22,7 +22,7 @@ import {
   type McpImportResult,
 } from './mcp-import.ts'
 import { probeMcpServer, type McpProbeResult } from './mcp-probe.ts'
-import { downloadSkillFromGithub, readSkillDetail, searchSkillMarket } from './skill-market.ts'
+import { downloadSkillFromGithub, latestSkillCommit, readSkillDetail, searchSkillMarket } from './skill-market.ts'
 
 /** Where the Node executable offered to MCP stdio servers came from. */
 export type McpNodeSource = 'bundled' | 'environment' | 'missing'
@@ -578,6 +578,16 @@ export class McpWindow {
           if (existing === undefined) return { ok: false, reason: imported.reason ?? '导入本地库失败。' }
           skillName = existing.name
         }
+        const source: SkillSource = {
+          id: downloaded.sourceId,
+          repository: downloaded.repository,
+          path: downloaded.path,
+          branch: downloaded.branch,
+          commit: downloaded.commit,
+          ...(downloaded.version === undefined ? {} : { version: downloaded.version }),
+          installedAt: new Date().toISOString(),
+        }
+        store.setLibrarySource(skillName, source)
         const published = store.publishSkill(skillName, kind === 'project'
           ? { kind: 'project', projectRoot: projectRoot as string, root }
           : { kind: 'global', root })
@@ -588,6 +598,63 @@ export class McpWindow {
         return { ok: true, name: skillName, target: published.target }
       } catch (error) {
         return { ok: false, reason: `安装 Skill 失败：${String(error)}` }
+      } finally {
+        if (downloaded !== undefined) await rm(downloaded.directory, { recursive: true, force: true })
+      }
+    })
+    ipcMain.handle(IPC.mcpSkillCheckUpdates, async (event) => {
+      guard(event)
+      const items: {
+        name: string
+        current: string
+        latest: string
+        updateAvailable: boolean
+        version: string
+        error?: string
+      }[] = []
+      for (const skill of store.listLibrarySkills()) {
+        if (skill.source === undefined) continue
+        try {
+          const latest = await latestSkillCommit(skill.source.repository, skill.source.path, skill.source.branch)
+          items.push({
+            name: skill.name,
+            current: skill.source.commit,
+            latest,
+            updateAvailable: latest !== '' && latest !== skill.source.commit,
+            version: skill.version ?? skill.source.version ?? '',
+          })
+        } catch (error) {
+          items.push({ name: skill.name, current: skill.source.commit, latest: '', updateAvailable: false, version: skill.version ?? '', error: String(error) })
+        }
+      }
+      return { items }
+    })
+    ipcMain.handle(IPC.mcpSkillUpdate, async (event, name: unknown) => {
+      guard(event)
+      if (typeof name !== 'string') return { ok: false, reason: 'Skill 名称无效。' }
+      const skill = store.listLibrarySkills().find((entry) => entry.name === name || basename(entry.path) === name)
+      if (skill === undefined) return { ok: false, reason: '本地 Skill 库里找不到这个 Skill。' }
+      if (skill.source === undefined) return { ok: false, reason: '这个 Skill 没有记录来源，无法检查更新；请从市场重新安装。' }
+      let downloaded: Awaited<ReturnType<typeof downloadSkillFromGithub>> | undefined
+      try {
+        downloaded = await downloadSkillFromGithub(skill.source.id)
+        if (downloaded.commit !== '' && downloaded.commit === skill.source.commit) {
+          return { ok: true, updated: false, version: skill.version ?? skill.source.version ?? '' }
+        }
+        const source: SkillSource = {
+          id: downloaded.sourceId,
+          repository: downloaded.repository,
+          path: downloaded.path,
+          branch: downloaded.branch,
+          commit: downloaded.commit,
+          ...(downloaded.version === undefined ? {} : { version: downloaded.version }),
+          installedAt: new Date().toISOString(),
+        }
+        const replaced = store.replaceLibrarySkill(skill.name, downloaded.directory, source)
+        if (!replaced.ok) return { ok: false, reason: replaced.reason ?? '替换本地 Skill 失败。' }
+        return { ok: true, updated: true, version: downloaded.version ?? '', commit: downloaded.commit }
+      } catch (error) {
+        return { ok: false, reason: `更新 Skill 失败：${String(error)}` }
       } finally {
         if (downloaded !== undefined) await rm(downloaded.directory, { recursive: true, force: true })
       }

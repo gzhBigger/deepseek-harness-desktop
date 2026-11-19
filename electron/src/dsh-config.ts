@@ -16,6 +16,7 @@
  * hand-written data; losing its comments once is enough to make people stop trusting the feature.
  */
 
+import { createHash, randomUUID } from 'node:crypto'
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
@@ -74,6 +75,19 @@ export interface McpServerInput {
 
 export type SkillKind = 'bundle' | 'file'
 
+/** Where a library skill came from, recorded only for market installs. */
+export interface SkillSource {
+  /** skills.sh identifier: owner/repo/skill. */
+  readonly id: string
+  readonly repository: string
+  readonly path: string
+  readonly branch: string
+  /** Empty when GitHub did not return a commit at install time. */
+  readonly commit: string
+  readonly version?: string
+  readonly installedAt?: string
+}
+
 export interface SkillEntry {
   readonly name: string
   readonly description: string
@@ -82,6 +96,8 @@ export interface SkillEntry {
   /** True when the entry is a link the shell created (removable); real directories are not. */
   readonly linked: boolean
   readonly target?: string
+  readonly version?: string
+  readonly source?: SkillSource
 }
 
 export type SkillPublicationKind = 'global' | 'project'
@@ -169,6 +185,8 @@ export interface DshConfigStore {
   listWorkspaces(): readonly SkillWorkspace[]
   listLibrarySkills(): readonly SkillEntry[]
   importSkill(directory: string, name?: string): ConfigResult & { readonly name?: string }
+  setLibrarySource(name: string, source: SkillSource): ConfigResult
+  replaceLibrarySkill(name: string, directory: string, source?: SkillSource): ConfigResult
   removeLibrarySkill(name: string): ConfigResult
   publishSkill(name: string, target: SkillPublishTarget): ConfigResult & { readonly target?: string }
   unpublishSkill(name: string, targetPath: string): ConfigResult
@@ -446,7 +464,7 @@ function setMcpRow(doc: Document, map: YAMLMap, id: string, config: Record<strin
  * richer SKILL.md still lists correctly. A malformed frontmatter is not an error: the directory name
  * is a perfectly good skill name.
  */
-export function readSkillMeta(directory: string): { name: string; description: string } {
+export function readSkillMeta(directory: string): { name: string; description: string; version?: string } {
   const fallback = { name: basename(directory), description: '' }
   try {
     const text = readFileSync(join(directory, 'SKILL.md'), 'utf8')
@@ -456,9 +474,14 @@ export function readSkillMeta(directory: string): { name: string; description: s
       return { name: fallback.name, description: heading?.[1]?.trim() ?? '' }
     }
     const meta = asRecord(parseYaml(match[1] ?? ''))
+    const nested = asRecord(meta?.['metadata'])
+    const version = typeof meta?.['version'] === 'string'
+      ? meta['version']
+      : (typeof nested?.['version'] === 'string' ? nested['version'] : undefined)
     return {
       name: typeof meta?.name === 'string' && meta.name !== '' ? meta.name : fallback.name,
       description: typeof meta?.description === 'string' ? meta.description : '',
+      ...(version === undefined || version.trim() === '' ? {} : { version: version.trim() }),
     }
   } catch {
     return fallback
@@ -470,6 +493,12 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
   const libraryRoot = resolve(options.libraryRoot ?? join(options.home, 'skills-library'))
   const agentsSkillsRoot = resolve(options.agentsSkillsRoot ?? join(options.home, '..', '.agents', 'skills'))
   const publicationsFile = join(libraryRoot, '.publications.json')
+  // Source metadata lives outside the Skill directory so it is never copied into a published
+  // junction and never becomes part of the Skill's own files. The key is hashed because library
+  // names may contain characters that are awkward in a file name.
+  const sourcesDir = join(libraryRoot, '.sources')
+  const sourceFile = (name: string): string =>
+    join(sourcesDir, `${createHash('sha256').update(name).digest('hex').slice(0, 16)}.json`)
   const log = options.log ?? (() => {})
   let document: Document | undefined
   let documentText = ''
@@ -791,6 +820,35 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
     return { ok: true }
   }
 
+  const readLibrarySource = (name: string): SkillSource | undefined => {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(sourceFile(name), 'utf8'))
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined
+      const record = parsed as Record<string, unknown>
+      if (typeof record['id'] !== 'string'
+        || typeof record['repository'] !== 'string'
+        || typeof record['path'] !== 'string'
+        || typeof record['branch'] !== 'string'
+        || typeof record['commit'] !== 'string') return undefined
+      return {
+        id: record['id'],
+        repository: record['repository'],
+        path: record['path'],
+        branch: record['branch'],
+        commit: record['commit'],
+        ...(typeof record['version'] === 'string' && record['version'] !== '' ? { version: record['version'] } : {}),
+        ...(typeof record['installedAt'] === 'string' && record['installedAt'] !== '' ? { installedAt: record['installedAt'] } : {}),
+      }
+    } catch {
+      return undefined
+    }
+  }
+
+  const writeLibrarySource = (name: string, source: SkillSource): void => {
+    mkdirSync(sourcesDir, { recursive: true })
+    writeFileSync(sourceFile(name), `${JSON.stringify(source, null, 2)}\n`, 'utf8')
+  }
+
   const listLibrarySkills = (): readonly SkillEntry[] => {
     const out: SkillEntry[] = []
     let entries: string[]
@@ -806,7 +864,16 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
         const info = lstatSync(path)
         if (!info.isDirectory() || !existsSync(join(path, 'SKILL.md'))) continue
         const meta = readSkillMeta(path)
-        out.push({ name: meta.name === '' ? name : meta.name, description: meta.description, path, kind: 'bundle', linked: false })
+        const source = readLibrarySource(name)
+        out.push({
+          name: meta.name === '' ? name : meta.name,
+          description: meta.description,
+          path,
+          kind: 'bundle',
+          linked: false,
+          ...(meta.version === undefined ? {} : { version: meta.version }),
+          ...(source === undefined ? {} : { source }),
+        })
       } catch {
         // A library entry removed during enumeration is not a list failure.
       }
@@ -840,6 +907,46 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
     }
   }
 
+  const findLibrarySkill = (name: string): SkillEntry | undefined =>
+    listLibrarySkills().find((item) => item.name === name || basename(item.path) === name)
+
+  const setLibrarySource = (name: string, source: SkillSource): ConfigResult => {
+    const entry = findLibrarySkill(name)
+    if (entry === undefined) return { ok: false, reason: '本地 Skill 库里找不到这个 Skill。' }
+    try {
+      writeLibrarySource(basename(entry.path), source)
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, reason: `记录 Skill 来源失败：${String(error)}` }
+    }
+  }
+
+  const replaceLibrarySkill = (name: string, directory: string, source?: SkillSource): ConfigResult => {
+    const entry = findLibrarySkill(name)
+    if (entry === undefined) return { ok: false, reason: '本地 Skill 库里找不到这个 Skill。' }
+    const target = entry.path
+    const token = randomUUID().slice(0, 12)
+    const staging = join(libraryRoot, `.incoming-${token}`)
+    const backup = join(libraryRoot, `.backup-${token}`)
+    try {
+      cpSync(directory, staging, { recursive: true, errorOnExist: true, force: false })
+      if (!existsSync(join(staging, 'SKILL.md'))) throw new Error('新版本缺少 SKILL.md。')
+      renameSync(target, backup)
+      try {
+        renameSync(staging, target)
+      } catch (error) {
+        renameSync(backup, target)
+        throw error
+      }
+      rmSync(backup, { recursive: true, force: true })
+      if (source !== undefined) writeLibrarySource(basename(target), source)
+      return { ok: true }
+    } catch (error) {
+      rmSync(staging, { recursive: true, force: true })
+      return { ok: false, reason: `替换本地 Skill 失败：${String(error)}` }
+    }
+  }
+
   const removeLibrarySkill = (name: string): ConfigResult => {
     const entry = listLibrarySkills().find((item) => item.name === name || basename(item.path) === name)
     if (entry === undefined) return { ok: false, reason: '本地 Skill 库里找不到这个 Skill。' }
@@ -854,6 +961,7 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
       const info = lstatSync(entry.path)
       if (!info.isDirectory() || info.isSymbolicLink()) return { ok: false, reason: '本地库条目不是普通目录，未删除。' }
       rmSync(entry.path, { recursive: true, force: true })
+      rmSync(sourceFile(basename(entry.path)), { force: true })
       return { ok: true }
     } catch (error) {
       return { ok: false, reason: `清理本地库 Skill 失败：${String(error)}` }
@@ -1022,6 +1130,8 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
     listWorkspaces,
     listLibrarySkills,
     importSkill,
+    setLibrarySource,
+    replaceLibrarySkill,
     removeLibrarySkill,
     publishSkill,
     unpublishSkill,
