@@ -57,6 +57,15 @@
   .probe-error { color: var(--danger); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
   .empty { color: var(--muted); text-align: center; padding: 28px 0; }
+  .hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+  .market-detail { border: 1px solid var(--line); border-radius: 9px; padding: 12px; background: var(--panel); display: flex; flex-direction: column; gap: 8px; }
+  .market-detail[hidden] { display: none; }
+  .market-detail .command { display: flex; gap: 6px; align-items: center; }
+  .market-detail .command code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-family: ui-monospace, Consolas, monospace; background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  .market-metrics { color: var(--muted); font-size: 12px; }
+  .publication { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; color: var(--muted); font-size: 11.5px; }
+  .publication code { overflow-wrap: anywhere; }
+  .source-badge { margin-top: 4px; color: var(--muted); font-size: 11px; }
   .form { border: 1px solid var(--line); border-radius: 9px; padding: 12px; background: var(--panel); display: flex; flex-direction: column; gap: 8px; }
   .form[hidden] { display: none; }
   .row { display: flex; gap: 8px; align-items: flex-start; }
@@ -125,6 +134,7 @@
     <div class="tabs">
       <button type="button" id="tabMcp" class="active">MCP 服务</button>
       <button type="button" id="tabSkills">Skills</button>
+      <button type="button" id="tabMarket">Skill 市场</button>
     </div>
   </header>
 
@@ -183,11 +193,22 @@
 
     <section class="panel" id="panelSkills">
       <div class="toolbar">
-        <button type="button" class="primary" id="addSkill">添加目录链接</button>
+        <button type="button" class="primary" id="importSkill">添加到本地库</button>
         <button type="button" id="refreshSkills">刷新</button>
         <span class="path" id="skillsRoot"></span>
       </div>
+      <p class="hint" id="libraryHint"></p>
       <div class="scroll" id="skillList"></div>
+    </section>
+
+    <section class="panel" id="panelMarket">
+      <div class="toolbar">
+        <input type="text" id="marketQuery" placeholder="搜索 skills.sh，例如 react、testing" />
+        <button type="button" class="primary" id="marketSearch">搜索</button>
+      </div>
+      <p class="hint">只读浏览 skills.sh。可复制安装命令并在终端执行；这里不会下载或运行第三方脚本。</p>
+      <div class="scroll" id="marketResults"></div>
+      <div class="market-detail" id="marketDetail" hidden></div>
     </section>
   </main>
 
@@ -897,19 +918,62 @@
       }
     }
 
-    function renderSkills(items) {
+    let skillState = { libraryRoot: '', publications: [] }
+
+    function samePath(left, right) {
+      return String(left || '').toLowerCase() === String(right || '').toLowerCase()
+    }
+
+    function renderSkills(state) {
       const list = $('skillList')
       list.replaceChildren()
-      if (!items || items.length === 0) {
-        list.append(el('div', 'empty', '没有发现 Skill。点「添加目录链接」选择一个含 SKILL.md 的目录。'))
+      const library = (state && state.library) || []
+      const items = (state && state.items) || []
+      const publications = (state && state.publications) || []
+      skillState = { libraryRoot: (state && state.libraryRoot) || '', publications }
+      $('libraryHint').textContent = state && state.libraryRoot
+        ? '本地库：' + state.libraryRoot + '。发布只创建指向本地库的 junction，不复制源文件。'
+        : ''
+      if (library.length === 0 && items.length === 0) {
+        list.append(el('div', 'empty', '本地库还没有 Skill。点「添加到本地库」选择一个含 SKILL.md 的目录。'))
         return
       }
-      for (const skill of items) {
+      for (const skill of library) {
         const card = el('div', 'card')
         const grow = el('div', 'grow')
         const name = el('div', 'name', skill.name)
-        name.append(tag(skill.kind === 'bundle' ? 'SKILL.md 目录' : '单文件'))
-        if (skill.linked) name.append(tag('壳创建的链接', 'ok'))
+        name.append(tag('本地库'))
+        grow.append(name)
+        if (skill.description) grow.append(el('div', 'desc', skill.description))
+        grow.append(el('div', 'summary', skill.path))
+        const pubs = publications.filter((item) => samePath(item.name, skill.name))
+        for (const pub of pubs) {
+          const row = el('div', 'publication')
+          row.append(el('span', null, pub.kind === 'global' ? '已发布到全局：' : '已发布到项目：'))
+          row.append(el('code', null, pub.target))
+          const undo = el('button', 'small danger', '取消发布')
+          undo.addEventListener('click', () => { void unpublishSkill(pub) })
+          row.append(undo)
+          grow.append(row)
+        }
+        card.append(grow)
+        const actions = el('div', 'actions')
+        const publishGlobal = el('button', 'small', '发布到全局')
+        publishGlobal.addEventListener('click', () => { void publishSkill(skill, 'global') })
+        actions.append(publishGlobal)
+        const publishProject = el('button', 'small', '发布到项目…')
+        publishProject.addEventListener('click', () => { void publishSkill(skill, 'project') })
+        actions.append(publishProject)
+        card.append(actions)
+        list.append(card)
+      }
+      const libraryPaths = new Set(library.map((skill) => String(skill.path || '').toLowerCase()))
+      for (const skill of items) {
+        if (skill.linked && skill.target && libraryPaths.has(String(skill.target).toLowerCase())) continue
+        const card = el('div', 'card')
+        const grow = el('div', 'grow')
+        const name = el('div', 'name', skill.name)
+        name.append(tag(skill.linked ? '外部链接' : '全局目录', skill.linked ? 'ok' : ''))
         grow.append(name)
         if (skill.description) grow.append(el('div', 'desc', skill.description))
         grow.append(el('div', 'summary', skill.path))
@@ -930,24 +994,54 @@
         const state = await api.skills()
         $('skillsRoot').textContent = (state && state.skillsRoot) || ''
         $('skillsRoot').title = (state && state.skillsRoot) || ''
-        renderSkills((state && state.items) || [])
+        renderSkills(state)
       } catch (error) {
         setStatus('读取 Skills 失败：' + String(error), 'error')
       }
     }
 
-    async function addSkill() {
+    async function importSkill() {
       try {
-        const result = await api.addSkill()
+        const result = await api.importSkill()
         if (!result || result.ok !== true) {
           if (result && result.reason === '已取消。') { setStatus(''); return }
           setStatus((result && result.reason) || '添加失败。', 'error')
           return
         }
         await loadSkills()
-        setStatus('已创建链接（不是复制）。DSH 会在下次启动时发现它。', 'ok')
+        setStatus('已复制到壳的本地 Skill 库；发布时再创建链接。', 'ok')
       } catch (error) {
         setStatus('添加失败：' + String(error), 'error')
+      }
+    }
+
+    async function publishSkill(skill, kind) {
+      try {
+        const result = await api.publishSkill(skill.name, { kind })
+        if (!result || result.ok !== true) {
+          if (result && result.reason === '已取消。') { setStatus(''); return }
+          setStatus((result && result.reason) || '发布失败。', 'error')
+          return
+        }
+        await loadSkills()
+        setStatus('已发布：' + (result.target || ''), 'ok')
+      } catch (error) {
+        setStatus('发布失败：' + String(error), 'error')
+      }
+    }
+
+    async function unpublishSkill(publication) {
+      if (!window.confirm('取消发布「' + publication.name + '」？只删除链接，不动本地库。')) return
+      try {
+        const result = await api.unpublishSkill(publication.name, publication.target)
+        if (!result || result.ok !== true) {
+          setStatus((result && result.reason) || '取消发布失败。', 'error')
+          return
+        }
+        await loadSkills()
+        setStatus('已取消发布。', 'ok')
+      } catch (error) {
+        setStatus('取消发布失败：' + String(error), 'error')
       }
     }
 
@@ -966,6 +1060,122 @@
       }
     }
 
+    let marketDetail = null
+
+    function installsText(value) {
+      if (typeof value === 'string') return value.trim() === '' ? '—' : value
+      const number = Number(value)
+      return Number.isFinite(number) && number > 0 ? number.toLocaleString() : '—'
+    }
+
+    function renderMarket(skills) {
+      const list = $('marketResults')
+      list.replaceChildren()
+      if (!skills || skills.length === 0) {
+        list.append(el('div', 'empty', '没有找到 Skill。换一个关键词试试。'))
+        return
+      }
+      for (const skill of skills) {
+        const card = el('div', 'card')
+        const grow = el('div', 'grow')
+        const name = el('div', 'name', skill.name)
+        name.append(tag('skills.sh'))
+        grow.append(name)
+        grow.append(el('div', 'summary', skill.id))
+        grow.append(el('div', 'summary', '安装量：' + installsText(skill.installs)))
+        const actions = el('div', 'actions')
+        const view = el('button', 'small', '详情')
+        view.addEventListener('click', () => { void showMarketDetail(skill.id) })
+        actions.append(view)
+        const open = el('button', 'small', '打开')
+        open.addEventListener('click', () => { void openMarket(skill.url) })
+        actions.append(open)
+        card.append(grow, actions)
+        list.append(card)
+      }
+    }
+
+    async function searchMarket() {
+      const query = $('marketQuery').value.trim()
+      if (query.length < 2) {
+        setStatus('搜索词至少 2 个字符。', 'error')
+        return
+      }
+      setStatus('正在搜索 skills.sh…')
+      $('marketDetail').hidden = true
+      $('marketResults').replaceChildren()
+      try {
+        const result = await api.marketSearch(query, 60)
+        const skills = (result && result.skills) || []
+        renderMarket(skills)
+        setStatus('找到 ' + skills.length + ' 个 Skill。', 'ok')
+      } catch (error) {
+        setStatus('搜索失败：' + String(error), 'error')
+      }
+    }
+
+    async function showMarketDetail(id) {
+      const box = $('marketDetail')
+      box.hidden = false
+      box.replaceChildren(el('div', 'empty', '正在读取详情…'))
+      try {
+        const detail = await api.marketDetail(id)
+        marketDetail = detail
+        box.replaceChildren()
+        const title = el('div', 'name', detail.name || id)
+        title.append(tag('skills.sh'))
+        box.append(title)
+        box.append(el('div', 'summary', detail.id || id))
+        if (detail.description) box.append(el('div', 'desc', detail.description))
+        const metrics = el('div', 'market-metrics',
+          '安装：' + installsText(detail.installs) + ' · ★ ' + installsText(detail.stars) +
+          (detail.repository ? ' · ' + detail.repository : ''))
+        box.append(metrics)
+        if (detail.installCommand) {
+          const command = el('div', 'command')
+          command.append(el('code', null, detail.installCommand))
+          const copy = el('button', 'small', '复制')
+          copy.addEventListener('click', () => { void copyMarketCommand(detail.installCommand) })
+          command.append(copy)
+          box.append(command)
+        }
+        const actions = el('div', 'actions')
+        const repo = el('button', 'small', '打开 skills.sh')
+        repo.addEventListener('click', () => { if (detail.url) void openMarket(detail.url) })
+        actions.append(repo)
+        const close = el('button', 'small', '关闭')
+        close.addEventListener('click', closeMarketDetail)
+        actions.append(close)
+        box.append(actions)
+      } catch (error) {
+        box.replaceChildren(el('div', 'empty', '读取详情失败：' + String(error)))
+      }
+    }
+
+    function closeMarketDetail() {
+      marketDetail = null
+      $('marketDetail').hidden = true
+      $('marketDetail').replaceChildren()
+    }
+
+    async function copyMarketCommand(text) {
+      try {
+        await navigator.clipboard.writeText(text)
+        setStatus('安装命令已复制。', 'ok')
+      } catch {
+        setStatus('复制失败，请手动选择命令复制。', 'error')
+      }
+    }
+
+    async function openMarket(url) {
+      try {
+        const result = await api.openExternal(url)
+        if (result && result.ok !== true) setStatus((result && result.reason) || '打开失败。', 'error')
+      } catch (error) {
+        setStatus('打开失败：' + String(error), 'error')
+      }
+    }
+
     async function restart() {
       if (!window.confirm('重启 DSH 服务会结束当前所有运行中的会话（历史已保存），继续？')) return
       setStatus('正在重启…')
@@ -979,14 +1189,17 @@
     function switchTab(name) {
       $('tabMcp').classList.toggle('active', name === 'mcp')
       $('tabSkills').classList.toggle('active', name === 'skills')
+      $('tabMarket').classList.toggle('active', name === 'market')
       $('panelMcp').classList.toggle('active', name === 'mcp')
       $('panelSkills').classList.toggle('active', name === 'skills')
+      $('panelMarket').classList.toggle('active', name === 'market')
       if (name === 'skills') void loadSkills()
     }
 
     function wire() {
       $('tabMcp').addEventListener('click', () => { switchTab('mcp') })
       $('tabSkills').addEventListener('click', () => { switchTab('skills') })
+      $('tabMarket').addEventListener('click', () => { switchTab('market') })
       $('addServer').addEventListener('click', () => { showForm(null) })
       $('importMcp').addEventListener('click', openImport)
       $('importClose').addEventListener('click', closeImport)
@@ -1010,8 +1223,15 @@
       $('detectNode').addEventListener('click', () => { void detectNode() })
       $('cancelServer').addEventListener('click', hideForm)
       $('saveServer').addEventListener('click', () => { void saveServer() })
-      $('addSkill').addEventListener('click', () => { void addSkill() })
+      $('importSkill').addEventListener('click', () => { void importSkill() })
       $('refreshSkills').addEventListener('click', () => { void loadSkills() })
+      $('marketSearch').addEventListener('click', () => { void searchMarket() })
+      $('marketQuery').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          void searchMarket()
+        }
+      })
       $('restartButton').addEventListener('click', () => { void restart() })
       $('closeButton').addEventListener('click', () => { void api.close() })
     }

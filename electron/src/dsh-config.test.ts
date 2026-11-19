@@ -13,7 +13,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
@@ -407,6 +407,51 @@ test('skills list directory bundles, flat markdown, and links (removable only wh
   assert.equal(store.removeSkillLink('added').ok, true)
   assert.equal(existsSync(join(skillsRoot, 'added')), false)
   assert.equal(store.removeSkillLink('bundle').ok, false, 'real directories are never deleted by the shell')
+})
+
+test('a library skill is copied once, then published as a removable junction', () => {
+  const home = join(root, 'library-home')
+  const libraryRoot = join(home, 'shell-library')
+  const source = join(root, 'library-source')
+  mkdirSync(source, { recursive: true })
+  writeFileSync(join(source, 'SKILL.md'), '---\nname: library-skill\ndescription: from library\n---\n\n# Body\n', 'utf8')
+  const store = createDshConfigStore({ home, libraryRoot })
+
+  assert.deepEqual(store.listLibrarySkills(), [])
+  assert.equal(store.importSkill(source, 'library-skill').ok, true)
+  assert.equal(store.importSkill(source, 'library-skill').ok, false, 'the same name is refused')
+  const library = store.listLibrarySkills()
+  assert.deepEqual(library.map((skill) => skill.name), ['library-skill'])
+  assert.equal(existsSync(join(libraryRoot, 'library-skill', 'SKILL.md')), true)
+  assert.equal(existsSync(join(source, 'SKILL.md')), true, 'import is a copy, the source stays')
+
+  const global = store.publishSkill('library-skill', { kind: 'global' })
+  assert.equal(global.ok, true)
+  const globalTarget = join(home, 'skills', 'library-skill')
+  assert.equal(global.target, globalTarget)
+  assert.equal(lstatSync(globalTarget).isSymbolicLink(), true)
+  assert.equal(store.listSkillPublications().length, 1)
+
+  const projectRoot = join(root, 'library-project')
+  mkdirSync(projectRoot, { recursive: true })
+  const project = store.publishSkill('library-skill', { kind: 'project', projectRoot })
+  assert.equal(project.ok, true)
+  const projectTarget = join(projectRoot, '.dsh', 'skills', 'library-skill')
+  assert.equal(lstatSync(projectTarget).isSymbolicLink(), true)
+  assert.deepEqual(store.listSkillPublications().map((item) => item.kind).sort(), ['global', 'project'])
+
+  assert.equal(store.unpublishSkill('library-skill', projectTarget).ok, true)
+  assert.equal(existsSync(projectTarget), false)
+  assert.equal(existsSync(globalTarget), true, 'removing one publication leaves the other')
+  assert.deepEqual(store.listSkillPublications().map((item) => item.kind), ['global'])
+  assert.equal(store.listLibrarySkills().length, 1, 'unpublish never deletes the library copy')
+
+  const outside = join(root, 'outside-link-target')
+  mkdirSync(outside, { recursive: true })
+  const outsideLink = join(home, 'skills', 'outside')
+  symlinkSync(outside, outsideLink, 'junction')
+  assert.equal(store.unpublishSkill('outside', outsideLink).ok, false, 'a non-publication link is refused')
+  assert.equal(existsSync(outsideLink), true)
 })
 
 test('a broken patch file is reported instead of overwritten', () => {

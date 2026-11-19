@@ -16,8 +16,8 @@
  * hand-written data; losing its comments once is enough to make people stop trusting the feature.
  */
 
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
-import { basename, isAbsolute, join, resolve } from 'node:path'
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 import { isMap, isSeq, parseDocument, parse as parseYaml, type Document, type YAMLMap, type YAMLSeq } from 'yaml'
 
@@ -84,6 +84,16 @@ export interface SkillEntry {
   readonly target?: string
 }
 
+export type SkillPublicationKind = 'global' | 'project'
+
+export interface SkillPublication {
+  readonly name: string
+  readonly kind: SkillPublicationKind
+  readonly target: string
+  readonly projectRoot?: string
+  readonly createdAt: string
+}
+
 export interface ConfigResult {
   readonly ok: boolean
   readonly reason?: string
@@ -110,17 +120,28 @@ export interface DshConfigOptions {
   readonly home: string
   /** Profile name; defaults to the desktop profile. */
   readonly profileName?: string
+  /**
+   * Shell-owned canonical Skill library. Imported Skills are copied here; project/global
+   * publication only creates junctions pointing back at this directory.
+   */
+  readonly libraryRoot?: string
   readonly log?: (line: string) => void
 }
 
 export interface DshConfigStore {
   readonly patchPath: string
   readonly skillsRoot: string
+  readonly libraryRoot: string
   listMcpServers(): readonly McpServer[]
   saveMcpServer(input: McpServerInput): ConfigResult
   removeMcpServer(id: string): ConfigResult
   setMcpEnabled(id: string, enabled: boolean): ConfigResult
   listSkills(): readonly SkillEntry[]
+  listLibrarySkills(): readonly SkillEntry[]
+  importSkill(directory: string, name?: string): ConfigResult & { readonly name?: string }
+  publishSkill(name: string, target: { readonly kind: 'global' } | { readonly kind: 'project'; readonly projectRoot: string }): ConfigResult & { readonly target?: string }
+  unpublishSkill(name: string, targetPath: string): ConfigResult
+  listSkillPublications(): readonly SkillPublication[]
   addSkillLink(directory: string, name?: string): ConfigResult
   removeSkillLink(name: string): ConfigResult
   /** One-shot migration of the legacy plugin's MCP records and links. Idempotent. */
@@ -413,6 +434,8 @@ export function readSkillMeta(directory: string): { name: string; description: s
 
 export function createDshConfigStore(options: DshConfigOptions): DshConfigStore {
   const paths = resolveProfilePaths(options)
+  const libraryRoot = resolve(options.libraryRoot ?? join(options.home, 'skills-library'))
+  const publicationsFile = join(libraryRoot, '.publications.json')
   const log = options.log ?? (() => {})
   let document: Document | undefined
   let documentText = ''
@@ -631,6 +654,136 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
     }
   }
 
+  const readPublications = (): SkillPublication[] => {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(publicationsFile, 'utf8'))
+      if (!Array.isArray(parsed)) return []
+      return parsed.filter((item): item is SkillPublication => {
+        if (typeof item !== 'object' || item === null || Array.isArray(item)) return false
+        const record = item as Record<string, unknown>
+        return typeof record['name'] === 'string'
+          && (record['kind'] === 'global' || record['kind'] === 'project')
+          && typeof record['target'] === 'string'
+          && typeof record['createdAt'] === 'string'
+      })
+    } catch {
+      return []
+    }
+  }
+
+  const writePublications = (items: readonly SkillPublication[]): void => {
+    mkdirSync(dirname(publicationsFile), { recursive: true })
+    writeFileSync(publicationsFile, `${JSON.stringify(items, null, 2)}\n`, 'utf8')
+  }
+
+  const listLibrarySkills = (): readonly SkillEntry[] => {
+    const out: SkillEntry[] = []
+    let entries: string[]
+    try {
+      entries = readdirSync(libraryRoot)
+    } catch {
+      return out
+    }
+    for (const name of entries.sort()) {
+      if (name.startsWith('.')) continue
+      const path = join(libraryRoot, name)
+      try {
+        const info = lstatSync(path)
+        if (!info.isDirectory() || !existsSync(join(path, 'SKILL.md'))) continue
+        const meta = readSkillMeta(path)
+        out.push({ name: meta.name === '' ? name : meta.name, description: meta.description, path, kind: 'bundle', linked: false })
+      } catch {
+        // A library entry removed during enumeration is not a list failure.
+      }
+    }
+    return out
+  }
+
+  const importSkill = (directory: string, name?: string): ConfigResult & { readonly name?: string } => {
+    const target = resolve(directory)
+    try {
+      if (!statSync(target).isDirectory() || !existsSync(join(target, 'SKILL.md'))) {
+        return { ok: false, reason: '所选目录里没有 SKILL.md，不是 DSH Skill 目录。' }
+      }
+    } catch {
+      return { ok: false, reason: '所选目录不存在或无法读取。' }
+    }
+    const meta = readSkillMeta(target)
+    const skillName = (name ?? meta.name ?? basename(target)).trim()
+    if (skillName === '' || /[\\/:*?"<>|]/u.test(skillName) || skillName === '.' || skillName === '..') {
+      return { ok: false, reason: 'Skill 名称非法。' }
+    }
+    const destination = join(libraryRoot, skillName)
+    if (existsSync(destination)) return { ok: false, reason: `本地 Skill 库已有同名条目：${skillName}` }
+    try {
+      mkdirSync(libraryRoot, { recursive: true })
+      cpSync(target, destination, { recursive: true, errorOnExist: true, force: false })
+      return { ok: true, name: skillName }
+    } catch (error) {
+      rmSync(destination, { recursive: true, force: true })
+      return { ok: false, reason: `复制到本地 Skill 库失败：${String(error)}` }
+    }
+  }
+
+  const publishSkill = (
+    name: string,
+    target: { readonly kind: 'global' } | { readonly kind: 'project'; readonly projectRoot: string },
+  ): ConfigResult & { readonly target?: string } => {
+    const entry = listLibrarySkills().find((item) => item.name === name || basename(item.path) === name)
+    if (entry === undefined) return { ok: false, reason: '本地 Skill 库里找不到这个 Skill。' }
+    const projectRoot = target.kind === 'project' ? resolve(target.projectRoot) : undefined
+    if (projectRoot !== undefined) {
+      try {
+        if (!statSync(projectRoot).isDirectory()) return { ok: false, reason: '项目目录不存在。' }
+      } catch {
+        return { ok: false, reason: '项目目录不存在或无法读取。' }
+      }
+    }
+    const destination = target.kind === 'global'
+      ? join(paths.skillsRoot, basename(entry.path))
+      : join(projectRoot as string, '.dsh', 'skills', basename(entry.path))
+    if (existsSync(destination)) return { ok: false, reason: `目标位置已有同名条目：${destination}` }
+    try {
+      mkdirSync(dirname(destination), { recursive: true })
+      symlinkSync(entry.path, destination, 'junction')
+      const publications = readPublications().filter((item) => item.target !== destination)
+      publications.push({
+        name: entry.name,
+        kind: target.kind,
+        target: destination,
+        ...(projectRoot === undefined ? {} : { projectRoot }),
+        createdAt: new Date().toISOString(),
+      })
+      writePublications(publications)
+      return { ok: true, target: destination }
+    } catch (error) {
+      return { ok: false, reason: `发布 Skill 失败：${String(error)}` }
+    }
+  }
+
+  const unpublishSkill = (name: string, targetPath: string): ConfigResult => {
+    const target = resolve(targetPath)
+    const publication = readPublications().find((item) => item.name === name && resolve(item.target) === target)
+    if (publication === undefined) return { ok: false, reason: '没有找到这条发布记录，未删除。' }
+    try {
+      const info = lstatSync(target)
+      if (!info.isSymbolicLink()) return { ok: false, reason: '目标不是壳创建的链接，未删除。' }
+      const linkTarget = readlinkSync(target)
+      const resolvedTarget = isAbsolute(linkTarget) ? linkTarget : resolve(dirname(target), linkTarget)
+      const insideLibrary = relative(resolve(libraryRoot), resolvedTarget)
+      if (insideLibrary === '' || insideLibrary.startsWith('..') || isAbsolute(insideLibrary)) {
+        return { ok: false, reason: '链接不指向壳的本地 Skill 库，未删除。' }
+      }
+      unlinkSync(target)
+    } catch (error) {
+      return { ok: false, reason: `取消发布失败：${String(error)}` }
+    }
+    writePublications(readPublications().filter((item) => !(item.name === name && resolve(item.target) === target)))
+    return { ok: true }
+  }
+
+  const listSkillPublications = (): readonly SkillPublication[] => readPublications()
+
   const migrateLegacy = (): MigrationResult => {
     // Nothing to migrate in a profile that has no patch yet (the shell seeds it on first run).
     if (!existsSync(paths.patchPath)) {
@@ -717,11 +870,17 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
   return {
     patchPath: paths.patchPath,
     skillsRoot: paths.skillsRoot,
+    libraryRoot,
     listMcpServers,
     saveMcpServer,
     removeMcpServer,
     setMcpEnabled,
     listSkills,
+    listLibrarySkills,
+    importSkill,
+    publishSkill,
+    unpublishSkill,
+    listSkillPublications,
     addSkillLink,
     removeSkillLink,
     migrateLegacy,

@@ -1720,7 +1720,12 @@ function installBundledPlugins(): void {
 function dshConfigStore(): DshConfigStore {
   // The profile the shell boots, not the release default: on the dev channel those differ, and the
   // MCP window must edit the profile the running DSH actually reads.
-  return (dshConfig ??= createDshConfigStore({ home: harnessHomeDirectory(), profileName: desktopProfileName(), log: pushLog }))
+  return (dshConfig ??= createDshConfigStore({
+    home: harnessHomeDirectory(),
+    profileName: desktopProfileName(),
+    libraryRoot: join(bridgeDir(), 'skills'),
+    log: pushLog,
+  }))
 }
 
 function openMcpWindow(): void {

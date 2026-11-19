@@ -7,7 +7,7 @@
  * `dsh-mcp-skill-manager` (and its aggregator) go away.
  */
 
-import { BrowserWindow, dialog, ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { basename, join } from 'node:path'
@@ -22,6 +22,7 @@ import {
   type McpImportResult,
 } from './mcp-import.ts'
 import { probeMcpServer, type McpProbeResult } from './mcp-probe.ts'
+import { readSkillDetail, searchSkillMarket } from './skill-market.ts'
 
 /** Where the Node executable offered to MCP stdio servers came from. */
 export type McpNodeSource = 'bundled' | 'environment' | 'missing'
@@ -477,7 +478,71 @@ export class McpWindow {
     })
     ipcMain.handle(IPC.mcpSkills, (event) => {
       guard(event)
-      return { skillsRoot: store.skillsRoot, items: store.listSkills() }
+      return {
+        skillsRoot: store.skillsRoot,
+        libraryRoot: store.libraryRoot,
+        items: store.listSkills(),
+        library: store.listLibrarySkills(),
+        publications: store.listSkillPublications(),
+      }
+    })
+    ipcMain.handle(IPC.mcpImportSkill, async (event) => {
+      guard(event)
+      const owner = BrowserWindow.fromWebContents(event.sender)
+      const options: Electron.OpenDialogOptions = {
+        title: '选择包含 SKILL.md 的 Skill 目录',
+        properties: ['openDirectory'],
+      }
+      const result = owner === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(owner, options)
+      const directory = result.filePaths[0]
+      if (result.canceled || directory === undefined) return { ok: false, reason: '已取消。' }
+      return store.importSkill(directory)
+    })
+    ipcMain.handle(IPC.mcpPublishSkill, async (event, name: unknown, target: unknown) => {
+      guard(event)
+      if (typeof name !== 'string') return { ok: false, reason: 'Skill 名称无效。' }
+      const kind = typeof target === 'object' && target !== null && (target as Record<string, unknown>)['kind'] === 'project'
+        ? 'project'
+        : 'global'
+      if (kind === 'global') return store.publishSkill(name, { kind: 'global' })
+      const owner = BrowserWindow.fromWebContents(event.sender)
+      const options: Electron.OpenDialogOptions = {
+        title: '选择要发布到的项目目录',
+        properties: ['openDirectory'],
+      }
+      const picked = owner === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(owner, options)
+      const projectRoot = picked.filePaths[0]
+      if (picked.canceled || projectRoot === undefined) return { ok: false, reason: '已取消。' }
+      return store.publishSkill(name, { kind: 'project', projectRoot })
+    })
+    ipcMain.handle(IPC.mcpUnpublishSkill, (event, name: unknown, target: unknown) => {
+      guard(event)
+      if (typeof name !== 'string' || typeof target !== 'string') return { ok: false, reason: '发布记录无效。' }
+      return store.unpublishSkill(name, target)
+    })
+    ipcMain.handle(IPC.mcpSkillMarketSearch, async (event, query: unknown, limit: unknown) => {
+      guard(event)
+      return searchSkillMarket(typeof query === 'string' ? query : '', { limit: typeof limit === 'number' ? limit : 40 })
+    })
+    ipcMain.handle(IPC.mcpSkillMarketDetail, async (event, id: unknown) => {
+      guard(event)
+      return readSkillDetail(typeof id === 'string' ? id : '')
+    })
+    ipcMain.handle(IPC.mcpOpenExternal, async (event, url: unknown) => {
+      guard(event)
+      if (typeof url !== 'string') return { ok: false, reason: '链接无效。' }
+      let parsed: URL
+      try {
+        parsed = new URL(url)
+      } catch {
+        return { ok: false, reason: '链接无效。' }
+      }
+      const host = parsed.hostname.toLowerCase()
+      if (parsed.protocol !== 'https:' || (host !== 'skills.sh' && host !== 'www.skills.sh')) {
+        return { ok: false, reason: '只允许打开 skills.sh 链接。' }
+      }
+      await shell.openExternal(parsed.toString())
+      return { ok: true }
     })
     ipcMain.handle(IPC.mcpAddSkill, async (event) => {
       guard(event)

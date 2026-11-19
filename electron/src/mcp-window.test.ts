@@ -32,6 +32,7 @@ registerHooks({
         + 'globalThis.__mcpIpcMain = ipcMain\n'
         + 'export class BrowserWindow { static fromWebContents() { return null } }\n'
         + 'export const dialog = {}\n'
+        + 'export const shell = { openExternal: async () => {} }\n'
         + 'export { ipcMain }\n',
       ),
       shortCircuit: true,
@@ -186,6 +187,7 @@ function createHarness(
   const store = {
     patchPath: 'C:/home/profiles/dsh-desktop/cordis.patch.yml',
     skillsRoot: 'C:/home/skills',
+    libraryRoot: 'C:/home/skills-library',
     listMcpServers: () => state,
     saveMcpServer: (input: McpServerInput) => {
       saved.push(input)
@@ -222,6 +224,11 @@ function createHarness(
       return { ok: true }
     },
     listSkills: () => [],
+    listLibrarySkills: () => [],
+    importSkill: () => ({ ok: true }),
+    publishSkill: () => ({ ok: true }),
+    unpublishSkill: () => ({ ok: true }),
+    listSkillPublications: () => [],
     addSkillLink: () => ({ ok: true }),
     removeSkillLink: () => ({ ok: true }),
     migrateLegacy: () => ({ ok: true, servers: 0, skills: 0, alreadyDone: true, repaired: 0 }),

@@ -33,14 +33,14 @@ test('every element the script looks up exists in the markup', () => {
 
 test('the bridge methods match the preload contract exactly', () => {
   const used = new Set([...script.matchAll(/api\.([A-Za-z]+)\(/gu)].map((match) => match[1]))
-  const expected = ['addSkill', 'check', 'close', 'importApply', 'importParse', 'importPick', 'list', 'node', 'removeServer', 'removeSkill', 'restart', 'saveServer', 'setEnabled', 'skills']
+  const expected = ['check', 'close', 'importApply', 'importParse', 'importPick', 'importSkill', 'list', 'marketDetail', 'marketSearch', 'node', 'openExternal', 'publishSkill', 'removeServer', 'removeSkill', 'restart', 'saveServer', 'setEnabled', 'skills', 'unpublishSkill']
   assert.deepEqual([...used].sort(), expected)
   assert.match(script, /window\.__DSH_MCP__/u)
   assert.doesNotMatch(script, /__DSH_SETTINGS__|__DSH_USAGE__|__DSH_MARKET__/u)
 })
 
 test('both tabs and their lists exist, with a status line and the two footer buttons', () => {
-  for (const id of ['tabMcp', 'tabSkills', 'panelMcp', 'panelSkills', 'serverList', 'skillList', 'statusBar', 'restartButton', 'closeButton', 'patchPath', 'skillsRoot']) {
+  for (const id of ['tabMcp', 'tabSkills', 'tabMarket', 'panelMcp', 'panelSkills', 'panelMarket', 'serverList', 'skillList', 'marketResults', 'marketQuery', 'marketSearch', 'statusBar', 'restartButton', 'closeButton', 'patchPath', 'skillsRoot']) {
     assert.match(markup, new RegExp(`id="${id}"`, 'u'), `缺少 ${id}`)
   }
   assert.match(script, /switchTab\('skills'\)/u)
