@@ -9,8 +9,8 @@
 
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { existsSync } from 'node:fs'
-import { readFile, stat } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { readFile, rm, stat } from 'node:fs/promises'
+import { basename, join, resolve } from 'node:path'
 
 import { IPC, SHELL_PAGE_DOCUMENTS } from './constants.ts'
 import type { DshConfigStore, McpServer, McpServerInput, McpTransport } from './dsh-config.ts'
@@ -22,7 +22,7 @@ import {
   type McpImportResult,
 } from './mcp-import.ts'
 import { probeMcpServer, type McpProbeResult } from './mcp-probe.ts'
-import { readSkillDetail, searchSkillMarket } from './skill-market.ts'
+import { downloadSkillFromGithub, readSkillDetail, searchSkillMarket } from './skill-market.ts'
 
 /** Where the Node executable offered to MCP stdio servers came from. */
 export type McpNodeSource = 'bundled' | 'environment' | 'missing'
@@ -480,11 +480,18 @@ export class McpWindow {
       guard(event)
       return {
         skillsRoot: store.skillsRoot,
+        agentsSkillsRoot: store.agentsSkillsRoot,
         libraryRoot: store.libraryRoot,
-        items: store.listSkills(),
+        groups: store.listSkillScopes(),
         library: store.listLibrarySkills(),
         publications: store.listSkillPublications(),
+        workspaces: store.listWorkspaces(),
       }
+    })
+    ipcMain.handle(IPC.mcpRemoveLibrarySkill, (event, name: unknown) => {
+      guard(event)
+      if (typeof name !== 'string') return { ok: false, reason: 'Skill 名称无效。' }
+      return store.removeLibrarySkill(name)
     })
     ipcMain.handle(IPC.mcpImportSkill, async (event) => {
       guard(event)
@@ -501,10 +508,16 @@ export class McpWindow {
     ipcMain.handle(IPC.mcpPublishSkill, async (event, name: unknown, target: unknown) => {
       guard(event)
       if (typeof name !== 'string') return { ok: false, reason: 'Skill 名称无效。' }
-      const kind = typeof target === 'object' && target !== null && (target as Record<string, unknown>)['kind'] === 'project'
-        ? 'project'
-        : 'global'
-      if (kind === 'global') return store.publishSkill(name, { kind: 'global' })
+      const record = typeof target === 'object' && target !== null ? target as Record<string, unknown> : {}
+      const kind = record['kind'] === 'project' ? 'project' : 'global'
+      const root = record['root'] === 'agents' ? 'agents' : 'dsh'
+      if (kind === 'global') return store.publishSkill(name, { kind: 'global', root })
+      const supplied = typeof record['projectRoot'] === 'string' ? resolve(record['projectRoot']) : ''
+      const allowed = new Set(store.listWorkspaces().map((workspace) => resolve(workspace.path)))
+      if (supplied !== '') {
+        if (!allowed.has(supplied)) return { ok: false, reason: '项目目录不在工作区列表中，已拒绝。' }
+        return store.publishSkill(name, { kind: 'project', projectRoot: supplied, root })
+      }
       const owner = BrowserWindow.fromWebContents(event.sender)
       const options: Electron.OpenDialogOptions = {
         title: '选择要发布到的项目目录',
@@ -513,7 +526,8 @@ export class McpWindow {
       const picked = owner === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(owner, options)
       const projectRoot = picked.filePaths[0]
       if (picked.canceled || projectRoot === undefined) return { ok: false, reason: '已取消。' }
-      return store.publishSkill(name, { kind: 'project', projectRoot })
+      if (!allowed.has(resolve(projectRoot))) return { ok: false, reason: '项目目录不在工作区列表中，已拒绝。' }
+      return store.publishSkill(name, { kind: 'project', projectRoot, root })
     })
     ipcMain.handle(IPC.mcpUnpublishSkill, (event, name: unknown, target: unknown) => {
       guard(event)
@@ -527,6 +541,50 @@ export class McpWindow {
     ipcMain.handle(IPC.mcpSkillMarketDetail, async (event, id: unknown) => {
       guard(event)
       return readSkillDetail(typeof id === 'string' ? id : '')
+    })
+    ipcMain.handle(IPC.mcpSkillMarketInstall, async (event, id: unknown, target: unknown) => {
+      guard(event)
+      if (typeof id !== 'string') return { ok: false, reason: 'Skill 标识无效。' }
+      const record = typeof target === 'object' && target !== null ? target as Record<string, unknown> : {}
+      const kind = record['kind'] === 'project' ? 'project' : 'global'
+      const root = record['root'] === 'agents' ? 'agents' : 'dsh'
+      let projectRoot: string | undefined
+      if (kind === 'project') {
+        if (typeof record['projectRoot'] !== 'string' || record['projectRoot'] === '') {
+          return { ok: false, reason: '请选择要安装到的项目。' }
+        }
+        projectRoot = resolve(record['projectRoot'])
+        const allowed = new Set(store.listWorkspaces().map((workspace) => resolve(workspace.path)))
+        if (!allowed.has(projectRoot)) return { ok: false, reason: '项目目录不在工作区列表中，已拒绝。' }
+      }
+      let downloaded: Awaited<ReturnType<typeof downloadSkillFromGithub>> | undefined
+      let importedNow = false
+      try {
+        downloaded = await downloadSkillFromGithub(id)
+        let skillName = downloaded.name
+        const imported = store.importSkill(downloaded.directory, downloaded.name)
+        if (imported.ok && imported.name !== undefined) {
+          skillName = imported.name
+          importedNow = true
+        } else {
+          // Installing the same market skill into another scope reuses the library copy.
+          const existing = store.listLibrarySkills().find((skill) => skill.name === skillName || basename(skill.path) === skillName)
+          if (existing === undefined) return { ok: false, reason: imported.reason ?? '导入本地库失败。' }
+          skillName = existing.name
+        }
+        const published = store.publishSkill(skillName, kind === 'project'
+          ? { kind: 'project', projectRoot: projectRoot as string, root }
+          : { kind: 'global', root })
+        if (!published.ok) {
+          if (importedNow) store.removeLibrarySkill(skillName)
+          return { ok: false, reason: published.reason ?? '发布 Skill 失败。' }
+        }
+        return { ok: true, name: skillName, target: published.target }
+      } catch (error) {
+        return { ok: false, reason: `安装 Skill 失败：${String(error)}` }
+      } finally {
+        if (downloaded !== undefined) await rm(downloaded.directory, { recursive: true, force: true })
+      }
     })
     ipcMain.handle(IPC.mcpOpenExternal, async (event, url: unknown) => {
       guard(event)

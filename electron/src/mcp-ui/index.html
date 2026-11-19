@@ -58,6 +58,13 @@
   .actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
   .empty { color: var(--muted); text-align: center; padding: 28px 0; }
   .hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+  .scopebar { display: flex; flex-wrap: wrap; gap: 6px; }
+  .scopebar:empty { display: none; }
+  .scopebar button { padding: 4px 10px; border-radius: 999px; font-size: 12px; }
+  .scopebar button.active { border-color: var(--accent); color: var(--accent); background: #eef6ff; }
+  .scope-head { display: flex; align-items: center; gap: 6px; margin: 10px 0 4px; color: var(--muted); font-size: 12px; }
+  .scope-head code { font-size: 11px; }
+  .check { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.5; }
   .market-detail { border: 1px solid var(--line); border-radius: 9px; padding: 12px; background: var(--panel); display: flex; flex-direction: column; gap: 8px; }
   .market-detail[hidden] { display: none; }
   .market-detail .command { display: flex; gap: 6px; align-items: center; }
@@ -198,6 +205,7 @@
         <span class="path" id="skillsRoot"></span>
       </div>
       <p class="hint" id="libraryHint"></p>
+      <div class="scopebar" id="skillScopes"></div>
       <div class="scroll" id="skillList"></div>
     </section>
 
@@ -206,7 +214,7 @@
         <input type="text" id="marketQuery" placeholder="搜索 skills.sh，例如 react、testing" />
         <button type="button" class="primary" id="marketSearch">搜索</button>
       </div>
-      <p class="hint">只读浏览 skills.sh。可复制安装命令并在终端执行；这里不会下载或运行第三方脚本。</p>
+      <p class="hint">搜索 skills.sh 并安装到全局或项目。安装会下载到壳的本地 Skill 库，再链接到所选位置；不会执行第三方脚本。</p>
       <div class="scroll" id="marketResults"></div>
       <div class="market-detail" id="marketDetail" hidden></div>
     </section>
@@ -238,6 +246,46 @@
       <div class="modal-actions">
         <button type="button" id="importCancel">取消</button>
         <button type="button" class="primary" id="importApply" disabled>导入选中</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal-mask" id="publishModal" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="publishTitle">
+      <div class="modal-head">
+        <h2 id="publishTitle">发布 Skill</h2>
+        <button class="icon" id="publishClose" type="button" aria-label="关闭">×</button>
+      </div>
+      <p class="hint" id="publishSkillName"></p>
+      <label>目标项目 <select id="publishProject"></select></label>
+      <label>目标目录
+        <select id="publishRoot">
+          <option value="dsh">.dsh/skills</option>
+          <option value="agents">.agents/skills</option>
+        </select>
+      </label>
+      <div class="modal-actions">
+        <button type="button" id="publishCancel">取消</button>
+        <button type="button" class="primary" id="publishConfirm">发布</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal-mask" id="installModal" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="installTitle">
+      <div class="modal-head">
+        <h2 id="installTitle">安装 Skill</h2>
+        <button class="icon" id="installClose" type="button" aria-label="关闭">×</button>
+      </div>
+      <p class="hint" id="installSkillName"></p>
+      <p class="hint">技能正文会进入模型上下文，目录里可能包含 scripts 或其他资源；安装只下载文件，不会执行任何脚本。</p>
+      <label>安装到
+        <select id="installScope"></select>
+      </label>
+      <label class="check"><input type="checkbox" id="installTrust" /> 我确认信任这个技能，并同意把文件加入本地库并发布到所选作用域。</label>
+      <div class="modal-actions">
+        <button type="button" id="installCancel">取消</button>
+        <button type="button" class="primary" id="installConfirm" disabled>安装</button>
       </div>
     </section>
   </div>
@@ -918,25 +966,114 @@
       }
     }
 
-    let skillState = { libraryRoot: '', publications: [] }
+    let skillState = { libraryRoot: '', publications: [], groups: [], scope: 'all' }
 
     function samePath(left, right) {
       return String(left || '').toLowerCase() === String(right || '').toLowerCase()
     }
 
-    function renderSkills(state) {
-      const list = $('skillList')
+    function skillRootLabel(root) {
+      return root === 'agents' ? '.agents' : '.dsh'
+    }
+
+    function projectScopeKey(projectRoot) {
+      return 'project:' + String(projectRoot || '').toLowerCase()
+    }
+
+    function scopeMatches(scope, group) {
+      if (scope === 'all') return true
+      if (scope === 'global') return group.kind === 'global'
+      return group.kind === 'project' && projectScopeKey(group.projectRoot) === scope
+    }
+
+    function renderSkillScopes(groups) {
+      const bar = $('skillScopes')
+      bar.replaceChildren()
+      const projects = new Map()
+      let globalCount = 0
+      let allCount = 0
+      for (const group of groups) {
+        const count = Array.isArray(group.items) ? group.items.length : 0
+        allCount += count
+        if (group.kind === 'global') globalCount += count
+        else if (group.projectRoot) projects.set(projectScopeKey(group.projectRoot), group.projectTitle || '项目')
+      }
+      const add = (key, label, count) => {
+        const button = el('button', null, label + ' ' + count)
+        button.type = 'button'
+        button.classList.toggle('active', skillState.scope === key)
+        button.addEventListener('click', () => {
+          skillState.scope = key
+          renderSkillScopes(groups)
+          renderSkillGroups(groups)
+        })
+        bar.append(button)
+      }
+      add('all', '全部', allCount)
+      add('global', '全局', globalCount)
+      for (const [key, title] of projects) {
+        let count = 0
+        for (const group of groups) if (scopeMatches(key, group)) count += group.items.length
+        add(key, title, count)
+      }
+      if (![...bar.children].some((button) => button.classList.contains('active'))) skillState.scope = 'all'
+    }
+
+    function renderSkillGroups(groups) {
+      const list = skillState.groupHost
+      if (!list) return
       list.replaceChildren()
+      const visible = groups.filter((group) => scopeMatches(skillState.scope, group))
+      const hasInstalled = visible.some((group) => group.items.length > 0)
+      if (!hasInstalled) {
+        list.append(el('div', 'empty', '这个范围内还没有已安装的 Skill。'))
+        return
+      }
+      for (const group of visible) {
+        if (group.items.length === 0) continue
+        const head = el('div', 'scope-head')
+        const title = group.kind === 'global'
+          ? '全局 · ' + skillRootLabel(group.root)
+          : (group.projectTitle || '项目') + ' · ' + skillRootLabel(group.root)
+        head.append(el('span', null, title))
+        head.append(tag(skillRootLabel(group.root)))
+        head.append(el('code', null, group.path))
+        list.append(head)
+        for (const skill of group.items) {
+          const card = el('div', 'card')
+          const grow = el('div', 'grow')
+          const name = el('div', 'name', skill.name)
+          name.append(tag(skill.linked ? '链接' : '目录', skill.linked ? 'ok' : ''))
+          grow.append(name)
+          if (skill.description) grow.append(el('div', 'desc', skill.description))
+          grow.append(el('div', 'summary', skill.path))
+          card.append(grow)
+          list.append(card)
+        }
+      }
+    }
+
+    function renderSkills(state) {
       const library = (state && state.library) || []
-      const items = (state && state.items) || []
       const publications = (state && state.publications) || []
-      skillState = { libraryRoot: (state && state.libraryRoot) || '', publications }
+      const groups = (state && state.groups) || []
+      skillState = {
+        libraryRoot: (state && state.libraryRoot) || '',
+        publications,
+        groups,
+        workspaces: (state && state.workspaces) || [],
+        scope: skillState.scope,
+      }
       $('libraryHint').textContent = state && state.libraryRoot
         ? '本地库：' + state.libraryRoot + '。发布只创建指向本地库的 junction，不复制源文件。'
         : ''
-      if (library.length === 0 && items.length === 0) {
-        list.append(el('div', 'empty', '本地库还没有 Skill。点「添加到本地库」选择一个含 SKILL.md 的目录。'))
-        return
+      renderSkillScopes(groups)
+      const list = $('skillList')
+      list.replaceChildren()
+      if (library.length > 0) {
+        const head = el('div', 'scope-head')
+        head.append(el('span', null, '本地库（未发布）'))
+        list.append(head)
       }
       for (const skill of library) {
         const card = el('div', 'card')
@@ -949,7 +1086,8 @@
         const pubs = publications.filter((item) => samePath(item.name, skill.name))
         for (const pub of pubs) {
           const row = el('div', 'publication')
-          row.append(el('span', null, pub.kind === 'global' ? '已发布到全局：' : '已发布到项目：'))
+          const root = skillRootLabel(pub.root)
+          row.append(el('span', null, (pub.kind === 'global' ? '已发布到全局' : '已发布到项目') + ' · ' + root + '：'))
           row.append(el('code', null, pub.target))
           const undo = el('button', 'small danger', '取消发布')
           undo.addEventListener('click', () => { void unpublishSkill(pub) })
@@ -958,38 +1096,27 @@
         }
         card.append(grow)
         const actions = el('div', 'actions')
-        const publishGlobal = el('button', 'small', '发布到全局')
-        publishGlobal.addEventListener('click', () => { void publishSkill(skill, 'global') })
-        actions.append(publishGlobal)
-        const publishProject = el('button', 'small', '发布到项目…')
-        publishProject.addEventListener('click', () => { void publishSkill(skill, 'project') })
-        actions.append(publishProject)
+        for (const root of ['dsh', 'agents']) {
+          const global = el('button', 'small', '发布到全局 · ' + skillRootLabel(root))
+          global.addEventListener('click', () => { void publishSkill(skill, 'global', root) })
+          actions.append(global)
+        }
+        const project = el('button', 'small', '发布到项目…')
+        project.addEventListener('click', () => { void publishSkill(skill, 'project', 'dsh') })
+        actions.append(project)
+        const remove = el('button', 'small danger', '从本地库删除')
+        remove.disabled = pubs.length > 0
+        remove.title = pubs.length > 0 ? '请先取消所有发布，再删除本地库副本。' : '删除本地库里的这份 Skill 源文件。'
+        remove.addEventListener('click', () => { void removeLibrarySkill(skill) })
+        actions.append(remove)
         card.append(actions)
         list.append(card)
       }
-      const libraryPaths = new Set(library.map((skill) => String(skill.path || '').toLowerCase()))
-      for (const skill of items) {
-        if (skill.linked && skill.target && libraryPaths.has(String(skill.target).toLowerCase())) continue
-        const card = el('div', 'card')
-        const grow = el('div', 'grow')
-        const name = el('div', 'name', skill.name)
-        name.append(tag(skill.linked ? '外部链接' : '全局目录', skill.linked ? 'ok' : ''))
-        grow.append(name)
-        if (skill.description) grow.append(el('div', 'desc', skill.description))
-        grow.append(el('div', 'summary', skill.path))
-        card.append(grow)
-        if (skill.linked) {
-          const actions = el('div', 'actions')
-          const remove = el('button', 'small danger', '移除链接')
-          remove.addEventListener('click', () => { void removeSkill(skill) })
-          actions.append(remove)
-          card.append(actions)
-        }
-        list.append(card)
-      }
-    }
-
-    async function loadSkills() {
+      const groupHost = el('div', null)
+      list.append(groupHost)
+      skillState.groupHost = groupHost
+      renderSkillGroups(groups)
+    }    async function loadSkills() {
       try {
         const state = await api.skills()
         $('skillsRoot').textContent = (state && state.skillsRoot) || ''
@@ -1015,9 +1142,61 @@
       }
     }
 
-    async function publishSkill(skill, kind) {
+    let pendingPublish = null
+
+    function openPublishDialog(skill, root) {
+      const projects = new Map()
+      for (const group of skillState.groups || []) {
+        if (group.kind === 'project' && group.projectRoot) projects.set(group.projectRoot, group.projectTitle || group.projectRoot)
+      }
+      if (projects.size === 0) {
+        setStatus('还没有可用于发布的项目，先在 DSH 里添加工作区。', 'error')
+        return
+      }
+      pendingPublish = skill
+      const select = $('publishProject')
+      select.replaceChildren()
+      for (const [path, title] of projects) {
+        const option = document.createElement('option')
+        option.value = path
+        option.textContent = title + ' — ' + path
+        select.append(option)
+      }
+      $('publishRoot').value = root === 'agents' ? 'agents' : 'dsh'
+      $('publishSkillName').textContent = '发布「' + skill.name + '」：只创建指向本地库的 junction，不复制源文件。'
+      $('publishModal').hidden = false
+    }
+
+    async function confirmPublish() {
+      if (!pendingPublish) return
+      const projectRoot = $('publishProject').value
+      const root = $('publishRoot').value === 'agents' ? 'agents' : 'dsh'
+      const name = pendingPublish.name
+      $('publishConfirm').disabled = true
       try {
-        const result = await api.publishSkill(skill.name, { kind })
+        const result = await api.publishSkill(name, { kind: 'project', projectRoot, root })
+        if (!result || result.ok !== true) {
+          setStatus((result && result.reason) || '发布失败。', 'error')
+          return
+        }
+        $('publishModal').hidden = true
+        pendingPublish = null
+        await loadSkills()
+        setStatus('已发布：' + (result.target || ''), 'ok')
+      } catch (error) {
+        setStatus('发布失败：' + String(error), 'error')
+      } finally {
+        $('publishConfirm').disabled = false
+      }
+    }
+
+    async function publishSkill(skill, kind, root) {
+      if (kind === 'project') {
+        openPublishDialog(skill, root)
+        return
+      }
+      try {
+        const result = await api.publishSkill(skill.name, { kind, root })
         if (!result || result.ok !== true) {
           if (result && result.reason === '已取消。') { setStatus(''); return }
           setStatus((result && result.reason) || '发布失败。', 'error')
@@ -1057,6 +1236,21 @@
         setStatus('已移除链接。', 'ok')
       } catch (error) {
         setStatus('移除失败：' + String(error), 'error')
+      }
+    }
+
+    async function removeLibrarySkill(skill) {
+      if (!window.confirm('从壳的本地库删除「' + skill.name + '」？已安装到全局/项目的链接必须先取消发布。')) return
+      try {
+        const result = await api.removeLibrarySkill(skill.name)
+        if (!result || result.ok !== true) {
+          setStatus((result && result.reason) || '删除失败。', 'error')
+          return
+        }
+        await loadSkills()
+        setStatus('已从本地库删除。', 'ok')
+      } catch (error) {
+        setStatus('删除失败：' + String(error), 'error')
       }
     }
 
@@ -1140,6 +1334,9 @@
           box.append(command)
         }
         const actions = el('div', 'actions')
+        const install = el('button', 'small primary', '安装…')
+        install.addEventListener('click', () => { openInstallDialog(detail) })
+        actions.append(install)
         const repo = el('button', 'small', '打开 skills.sh')
         repo.addEventListener('click', () => { if (detail.url) void openMarket(detail.url) })
         actions.append(repo)
@@ -1156,6 +1353,62 @@
       marketDetail = null
       $('marketDetail').hidden = true
       $('marketDetail').replaceChildren()
+    }
+
+    let installDetail = null
+    let installTargets = []
+
+    function openInstallDialog(detail) {
+      installDetail = detail
+      installTargets = [
+        { kind: 'global', root: 'dsh', label: '全局 · .dsh/skills' },
+        { kind: 'global', root: 'agents', label: '全局 · .agents/skills' },
+      ]
+      for (const workspace of skillState.workspaces || []) {
+        installTargets.push({ kind: 'project', root: 'dsh', projectRoot: workspace.path, label: workspace.title + ' · .dsh/skills' })
+        installTargets.push({ kind: 'project', root: 'agents', projectRoot: workspace.path, label: workspace.title + ' · .agents/skills' })
+      }
+      const select = $('installScope')
+      select.replaceChildren()
+      installTargets.forEach((target, index) => {
+        const option = document.createElement('option')
+        option.value = String(index)
+        option.textContent = target.label
+        select.append(option)
+      })
+      $('installSkillName').textContent = '安装「' + (detail.name || detail.id) + '」；会先复制到壳的本地 Skill 库，再发布到所选位置。'
+      $('installTrust').checked = false
+      $('installConfirm').disabled = true
+      $('installModal').hidden = false
+    }
+
+    async function confirmInstall() {
+      if (!installDetail || !$('installTrust').checked) return
+      const target = installTargets[Number($('installScope').value)]
+      if (!target) return
+      $('installConfirm').disabled = true
+      $('installCancel').disabled = true
+      setStatus('正在下载并安装…')
+      try {
+        const result = await api.marketInstall(installDetail.id, {
+          kind: target.kind,
+          root: target.root,
+          ...(target.projectRoot ? { projectRoot: target.projectRoot } : {}),
+        })
+        if (!result || result.ok !== true) {
+          setStatus((result && result.reason) || '安装失败。', 'error')
+          return
+        }
+        $('installModal').hidden = true
+        installDetail = null
+        await loadSkills()
+        setStatus('已安装：' + (result.target || result.name || ''), 'ok')
+      } catch (error) {
+        setStatus('安装失败：' + String(error), 'error')
+      } finally {
+        $('installConfirm').disabled = false
+        $('installCancel').disabled = false
+      }
     }
 
     async function copyMarketCommand(text) {
@@ -1211,10 +1464,37 @@
       $('importParse').addEventListener('click', () => { void parseImport() })
       $('importApply').addEventListener('click', () => { void applyImportSelection() })
       $('importPreview').addEventListener('change', updateImportApplyState)
+      $('publishClose').addEventListener('click', () => { $('publishModal').hidden = true; pendingPublish = null })
+      $('publishCancel').addEventListener('click', () => { $('publishModal').hidden = true; pendingPublish = null })
+      $('publishConfirm').addEventListener('click', () => { void confirmPublish() })
+      $('installClose').addEventListener('click', () => { $('installModal').hidden = true; installDetail = null })
+      $('installCancel').addEventListener('click', () => { $('installModal').hidden = true; installDetail = null })
+      $('installTrust').addEventListener('change', () => { $('installConfirm').disabled = !$('installTrust').checked })
+      $('installConfirm').addEventListener('click', () => { void confirmInstall() })
+      $('installModal').addEventListener('mousedown', (event) => {
+        if (event.target === $('installModal')) {
+          $('installModal').hidden = true
+          installDetail = null
+        }
+      })
+      $('publishModal').addEventListener('mousedown', (event) => {
+        if (event.target === $('publishModal')) {
+          $('publishModal').hidden = true
+          pendingPublish = null
+        }
+      })
       document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape' && !$('importModal').hidden) {
           event.preventDefault()
           closeImport()
+        } else if (event.key === 'Escape' && !$('publishModal').hidden) {
+          event.preventDefault()
+          $('publishModal').hidden = true
+          pendingPublish = null
+        } else if (event.key === 'Escape' && !$('installModal').hidden) {
+          event.preventDefault()
+          $('installModal').hidden = true
+          installDetail = null
         }
       })
       $('refreshMcp').addEventListener('click', () => { void loadServers() })

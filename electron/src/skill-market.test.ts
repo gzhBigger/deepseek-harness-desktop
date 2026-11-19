@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { readFileSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
+import { join } from 'node:path'
 
-import { parseSkillDetail, readSkillDetail, searchSkillMarket } from './skill-market.ts'
+import { downloadSkillFromGithub, parseSkillDetail, readSkillDetail, searchSkillMarket } from './skill-market.ts'
 
 const page = `<!doctype html><html><head>
 <meta name="description" content="Build reliable React interfaces." />
@@ -66,4 +69,61 @@ test('readSkillDetail uses the public page and parses it', async () => {
   })
   assert.equal(detail.name, 'React Best Practices')
   assert.equal(detail.installCommand.includes('--skill react-best-practices'), true)
+})
+
+
+test('downloadSkillFromGithub picks the SKILL.md directory and rejects symlinks', async () => {
+  const original = globalThis.fetch
+  const make = (body: string | Uint8Array, contentType = 'application/json') => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    json: async () => JSON.parse(body as string),
+    arrayBuffer: async () => (typeof body === 'string' ? new TextEncoder().encode(body).buffer : body.buffer),
+  }) as unknown as Response
+  const calls: string[] = []
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input)
+    calls.push(url)
+    if (url === 'https://api.github.com/repos/acme/demo') return make(JSON.stringify({ default_branch: 'main' }))
+    if (url.includes('/git/trees/main?recursive=1')) {
+      return make(JSON.stringify({ tree: [
+        { path: 'skills/demo/SKILL.md', type: 'blob', mode: '100644', size: 60 },
+        { path: 'skills/demo/scripts/run.sh', type: 'blob', mode: '100644', size: 10 },
+        { path: 'README.md', type: 'blob', mode: '100644', size: 10 },
+      ] }))
+    }
+    if (url.endsWith('skills/demo/SKILL.md')) return make('---\nname: demo\ndescription: test\n---\n', 'text/plain')
+    if (url.endsWith('skills/demo/scripts/run.sh')) return make('echo hi\n', 'text/plain')
+    throw new Error(`unexpected ${url}`)
+  }) as typeof fetch
+  try {
+    const result = await downloadSkillFromGithub('acme/demo/demo')
+    assert.equal(result.name, 'demo')
+    assert.equal(result.files, 2)
+    assert.equal(readFileSync(join(result.directory, 'SKILL.md'), 'utf8').includes('name: demo'), true)
+    assert.equal(readFileSync(join(result.directory, 'scripts', 'run.sh'), 'utf8'), 'echo hi\n')
+    await rm(result.directory, { recursive: true, force: true })
+    assert.equal(calls.some((url) => url.includes('raw.githubusercontent.com')), true)
+  } finally {
+    globalThis.fetch = original
+  }
+
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input)
+    if (url === 'https://api.github.com/repos/acme/demo') return make(JSON.stringify({ default_branch: 'main' }))
+    if (url.includes('/git/trees/main?recursive=1')) {
+      return make(JSON.stringify({ tree: [
+        { path: 'skills/demo/SKILL.md', type: 'blob', mode: '100644', size: 60 },
+        { path: 'skills/demo/link', type: 'blob', mode: '120000', size: 10 },
+      ] }))
+    }
+    if (url.endsWith('skills/demo/SKILL.md')) return make('---\nname: demo\n---\n', 'text/plain')
+    throw new Error(`unexpected ${url}`)
+  }) as typeof fetch
+  try {
+    await assert.rejects(() => downloadSkillFromGithub('acme/demo/demo'), /符号链接/u)
+  } finally {
+    globalThis.fetch = original
+  }
 })

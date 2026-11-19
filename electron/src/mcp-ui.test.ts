@@ -33,7 +33,7 @@ test('every element the script looks up exists in the markup', () => {
 
 test('the bridge methods match the preload contract exactly', () => {
   const used = new Set([...script.matchAll(/api\.([A-Za-z]+)\(/gu)].map((match) => match[1]))
-  const expected = ['check', 'close', 'importApply', 'importParse', 'importPick', 'importSkill', 'list', 'marketDetail', 'marketSearch', 'node', 'openExternal', 'publishSkill', 'removeServer', 'removeSkill', 'restart', 'saveServer', 'setEnabled', 'skills', 'unpublishSkill']
+  const expected = ['check', 'close', 'importApply', 'importParse', 'importPick', 'importSkill', 'list', 'marketDetail', 'marketInstall', 'marketSearch', 'node', 'openExternal', 'publishSkill', 'removeLibrarySkill', 'removeServer', 'removeSkill', 'restart', 'saveServer', 'setEnabled', 'skills', 'unpublishSkill']
   assert.deepEqual([...used].sort(), expected)
   assert.match(script, /window\.__DSH_MCP__/u)
   assert.doesNotMatch(script, /__DSH_SETTINGS__|__DSH_USAGE__|__DSH_MARKET__/u)
@@ -68,9 +68,10 @@ test('one page-level scroller: main flexes and scrolls, header/footer keep their
 })
 
 test('checkbox rows are inline labels, not a stacked half-width column', () => {
-  assert.equal((markup.match(/<label class="check">/gu) ?? []).length, 2, '两个 checkbox 都要 label.check')
+  assert.equal((markup.match(/<label class="check">/gu) ?? []).length, 3, '三个 checkbox 都要 label.check')
   assert.match(markup, /id="serverFailOnStartup"/u)
   assert.match(markup, /id="serverEnabled"[^>]*checked/u)
+  assert.match(markup, /id="installTrust"/u)
   assert.match(page, /\.row > label\.check \{[^}]*flex: 0 0 auto;[^}]*flex-direction: row;[^}]*align-items: center;/u)
   assert.match(page, /\.row > label\.check \{[^}]*color: var\(--fg\);/u)
 })

@@ -85,13 +85,38 @@ export interface SkillEntry {
 }
 
 export type SkillPublicationKind = 'global' | 'project'
+export type SkillRootKind = 'dsh' | 'agents'
+
+export type SkillPublishTarget =
+  | { readonly kind: 'global'; readonly root?: SkillRootKind }
+  | { readonly kind: 'project'; readonly projectRoot: string; readonly root?: SkillRootKind }
 
 export interface SkillPublication {
   readonly name: string
   readonly kind: SkillPublicationKind
+  /** Missing on records written before the shell managed both roots; treat it as `dsh`. */
+  readonly root?: SkillRootKind
   readonly target: string
   readonly projectRoot?: string
   readonly createdAt: string
+}
+
+export interface SkillWorkspace {
+  readonly id: string
+  readonly title: string
+  readonly path: string
+}
+
+/** One physical Skill root the window can browse. */
+export interface SkillScopeGroup {
+  readonly key: string
+  readonly kind: 'global' | 'project'
+  readonly root: SkillRootKind
+  readonly label: string
+  readonly path: string
+  readonly projectRoot?: string
+  readonly projectTitle?: string
+  readonly items: readonly SkillEntry[]
 }
 
 export interface ConfigResult {
@@ -125,21 +150,27 @@ export interface DshConfigOptions {
    * publication only creates junctions pointing back at this directory.
    */
   readonly libraryRoot?: string
+  /** `~/.agents/skills`; defaults to the sibling of `$DSH_HOME`. */
+  readonly agentsSkillsRoot?: string
   readonly log?: (line: string) => void
 }
 
 export interface DshConfigStore {
   readonly patchPath: string
   readonly skillsRoot: string
+  readonly agentsSkillsRoot: string
   readonly libraryRoot: string
   listMcpServers(): readonly McpServer[]
   saveMcpServer(input: McpServerInput): ConfigResult
   removeMcpServer(id: string): ConfigResult
   setMcpEnabled(id: string, enabled: boolean): ConfigResult
   listSkills(): readonly SkillEntry[]
+  listSkillScopes(): readonly SkillScopeGroup[]
+  listWorkspaces(): readonly SkillWorkspace[]
   listLibrarySkills(): readonly SkillEntry[]
   importSkill(directory: string, name?: string): ConfigResult & { readonly name?: string }
-  publishSkill(name: string, target: { readonly kind: 'global' } | { readonly kind: 'project'; readonly projectRoot: string }): ConfigResult & { readonly target?: string }
+  removeLibrarySkill(name: string): ConfigResult
+  publishSkill(name: string, target: SkillPublishTarget): ConfigResult & { readonly target?: string }
   unpublishSkill(name: string, targetPath: string): ConfigResult
   listSkillPublications(): readonly SkillPublication[]
   addSkillLink(directory: string, name?: string): ConfigResult
@@ -435,6 +466,7 @@ export function readSkillMeta(directory: string): { name: string; description: s
 export function createDshConfigStore(options: DshConfigOptions): DshConfigStore {
   const paths = resolveProfilePaths(options)
   const libraryRoot = resolve(options.libraryRoot ?? join(options.home, 'skills-library'))
+  const agentsSkillsRoot = resolve(options.agentsSkillsRoot ?? join(options.home, '..', '.agents', 'skills'))
   const publicationsFile = join(libraryRoot, '.publications.json')
   const log = options.log ?? (() => {})
   let document: Document | undefined
@@ -588,21 +620,21 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
     return persist(doc)
   }
 
-  const listSkills = (): readonly SkillEntry[] => {
+  const readSkillsAt = (root: string): readonly SkillEntry[] => {
     const out: SkillEntry[] = []
     let entries: string[]
     try {
-      entries = readdirSync(paths.skillsRoot)
+      entries = readdirSync(root)
     } catch {
       return out
     }
     for (const name of entries.sort()) {
-      const path = join(paths.skillsRoot, name)
+      const path = join(root, name)
       try {
         const info = lstatSync(path)
         if (info.isSymbolicLink()) {
           let target = ''
-          try { target = resolve(paths.skillsRoot, readLink(path)) } catch { target = '' }
+          try { target = resolve(root, readLink(path)) } catch { target = '' }
           const meta = target === '' ? { name, description: '' } : readSkillMeta(target)
           out.push({ name: meta.name === '' ? name : meta.name, description: meta.description, path, kind: 'bundle', linked: true, ...(target === '' ? {} : { target }) })
           continue
@@ -621,6 +653,57 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
       }
     }
     return out
+  }
+
+  const listSkills = (): readonly SkillEntry[] => readSkillsAt(paths.skillsRoot)
+
+  const listWorkspaces = (): readonly SkillWorkspace[] => {
+    try {
+      const parsed = JSON.parse(readFileSync(join(paths.home, 'storages', 'workspace.json'), 'utf8')) as unknown
+      const tables = asRecord(asRecord(parsed)?.['tables'])
+      const workspaces = asRecord(tables?.['workspaces'])
+      if (workspaces === undefined) return []
+      const out: SkillWorkspace[] = []
+      for (const [id, value] of Object.entries(workspaces)) {
+        const entry = asRecord(value)
+        if (entry === undefined || typeof entry['path'] !== 'string') continue
+        out.push({
+          id,
+          title: typeof entry['title'] === 'string' && entry['title'] !== '' ? entry['title'] : basename(entry['path']),
+          path: resolve(entry['path']),
+        })
+      }
+      return out.sort((left, right) => left.title.localeCompare(right.title))
+    } catch {
+      return []
+    }
+  }
+
+  const listSkillScopes = (): readonly SkillScopeGroup[] => {
+    const groups: SkillScopeGroup[] = [
+      { key: 'global:dsh', kind: 'global', root: 'dsh', label: '.dsh', path: paths.skillsRoot, items: readSkillsAt(paths.skillsRoot) },
+      { key: 'global:agents', kind: 'global', root: 'agents', label: '.agents', path: agentsSkillsRoot, items: readSkillsAt(agentsSkillsRoot) },
+    ]
+    for (const workspace of listWorkspaces()) {
+      for (const root of ['dsh', 'agents'] as const) {
+        const path = root === 'dsh'
+          ? join(workspace.path, '.dsh', 'skills')
+          : join(workspace.path, '.agents', 'skills')
+        const items = readSkillsAt(path)
+        if (items.length === 0 && !existsSync(path)) continue
+        groups.push({
+          key: `project:${workspace.id}:${root}`,
+          kind: 'project',
+          root,
+          label: workspace.title,
+          path,
+          projectRoot: workspace.path,
+          projectTitle: workspace.title,
+          items,
+        })
+      }
+    }
+    return groups
   }
 
   const addSkillLink = (directory: string, name?: string): ConfigResult => {
@@ -658,14 +741,24 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
     try {
       const parsed: unknown = JSON.parse(readFileSync(publicationsFile, 'utf8'))
       if (!Array.isArray(parsed)) return []
-      return parsed.filter((item): item is SkillPublication => {
-        if (typeof item !== 'object' || item === null || Array.isArray(item)) return false
+      const out: SkillPublication[] = []
+      for (const item of parsed) {
+        if (typeof item !== 'object' || item === null || Array.isArray(item)) continue
         const record = item as Record<string, unknown>
-        return typeof record['name'] === 'string'
-          && (record['kind'] === 'global' || record['kind'] === 'project')
-          && typeof record['target'] === 'string'
-          && typeof record['createdAt'] === 'string'
-      })
+        if (typeof record['name'] !== 'string'
+          || (record['kind'] !== 'global' && record['kind'] !== 'project')
+          || typeof record['target'] !== 'string'
+          || typeof record['createdAt'] !== 'string') continue
+        out.push({
+          name: record['name'],
+          kind: record['kind'],
+          root: record['root'] === 'agents' ? 'agents' : 'dsh',
+          target: record['target'],
+          ...(typeof record['projectRoot'] === 'string' ? { projectRoot: record['projectRoot'] } : {}),
+          createdAt: record['createdAt'],
+        })
+      }
+      return out
     } catch {
       return []
     }
@@ -725,13 +818,37 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
     }
   }
 
+  const removeLibrarySkill = (name: string): ConfigResult => {
+    const entry = listLibrarySkills().find((item) => item.name === name || basename(item.path) === name)
+    if (entry === undefined) return { ok: false, reason: '本地 Skill 库里找不到这个 Skill。' }
+    const relativePath = relative(libraryRoot, entry.path)
+    if (relativePath === '' || relativePath.startsWith('..') || isAbsolute(relativePath)) {
+      return { ok: false, reason: '本地库条目路径非法，未删除。' }
+    }
+    if (readPublications().some((publication) => publication.name === entry.name)) {
+      return { ok: false, reason: '这个 Skill 还有发布中的链接，请先取消发布。' }
+    }
+    try {
+      const info = lstatSync(entry.path)
+      if (!info.isDirectory() || info.isSymbolicLink()) return { ok: false, reason: '本地库条目不是普通目录，未删除。' }
+      rmSync(entry.path, { recursive: true, force: true })
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, reason: `清理本地库 Skill 失败：${String(error)}` }
+    }
+  }
+
   const publishSkill = (
     name: string,
-    target: { readonly kind: 'global' } | { readonly kind: 'project'; readonly projectRoot: string },
+    target: SkillPublishTarget,
   ): ConfigResult & { readonly target?: string } => {
     const entry = listLibrarySkills().find((item) => item.name === name || basename(item.path) === name)
     if (entry === undefined) return { ok: false, reason: '本地 Skill 库里找不到这个 Skill。' }
-    const projectRoot = target.kind === 'project' ? resolve(target.projectRoot) : undefined
+    const root = target.root ?? 'dsh'
+    if (target.kind === 'project' && (target.projectRoot === undefined || target.projectRoot === '')) {
+      return { ok: false, reason: '请选择要发布到的项目。' }
+    }
+    const projectRoot = target.kind === 'project' ? resolve(target.projectRoot as string) : undefined
     if (projectRoot !== undefined) {
       try {
         if (!statSync(projectRoot).isDirectory()) return { ok: false, reason: '项目目录不存在。' }
@@ -739,9 +856,10 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
         return { ok: false, reason: '项目目录不存在或无法读取。' }
       }
     }
+    const rootPath = root === 'agents' ? agentsSkillsRoot : paths.skillsRoot
     const destination = target.kind === 'global'
-      ? join(paths.skillsRoot, basename(entry.path))
-      : join(projectRoot as string, '.dsh', 'skills', basename(entry.path))
+      ? join(rootPath, basename(entry.path))
+      : join(projectRoot as string, root === 'agents' ? '.agents' : '.dsh', 'skills', basename(entry.path))
     if (existsSync(destination)) return { ok: false, reason: `目标位置已有同名条目：${destination}` }
     try {
       mkdirSync(dirname(destination), { recursive: true })
@@ -750,6 +868,7 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
       publications.push({
         name: entry.name,
         kind: target.kind,
+        root,
         target: destination,
         ...(projectRoot === undefined ? {} : { projectRoot }),
         createdAt: new Date().toISOString(),
@@ -870,14 +989,18 @@ export function createDshConfigStore(options: DshConfigOptions): DshConfigStore 
   return {
     patchPath: paths.patchPath,
     skillsRoot: paths.skillsRoot,
+    agentsSkillsRoot,
     libraryRoot,
     listMcpServers,
     saveMcpServer,
     removeMcpServer,
     setMcpEnabled,
     listSkills,
+    listSkillScopes,
+    listWorkspaces,
     listLibrarySkills,
     importSkill,
+    removeLibrarySkill,
     publishSkill,
     unpublishSkill,
     listSkillPublications,

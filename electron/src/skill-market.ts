@@ -6,6 +6,12 @@
  * renderer keeps `default-src 'none'`, and we can impose a timeout and response-size cap.
  */
 
+import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+
 export const SKILL_MARKET_ORIGIN = 'https://www.skills.sh'
 const SEARCH_TIMEOUT_MS = 15_000
 const DETAIL_TIMEOUT_MS = 15_000
@@ -170,4 +176,168 @@ export async function readSkillDetail(id: string, options: SkillMarketOptions = 
   if (clean === undefined) throw new Error('无效的 Skill 标识。')
   const html = await (options.fetchTextImpl ?? fetchText)(`${SKILL_MARKET_ORIGIN}/${clean}`, DETAIL_TIMEOUT_MS)
   return parseSkillDetail(html, clean)
+}
+
+export interface SkillInstallResult {
+  readonly directory: string
+  readonly name: string
+  readonly files: number
+}
+
+interface GithubTreeEntry {
+  readonly path: string
+  readonly type: string
+  readonly mode?: string
+  readonly size?: number
+}
+
+const MAX_INSTALL_FILES = 500
+const MAX_INSTALL_BYTES = 8 * 1024 * 1024
+const MAX_INSTALL_FILE_BYTES = 1024 * 1024
+const MAX_JSON_BYTES = 8 * 1024 * 1024
+
+function githubHeaders(): Record<string, string> {
+  return {
+    accept: 'application/vnd.github+json',
+    'user-agent': `dsh-desktop/${process.env['npm_package_version'] ?? 'dev'} (+${SKILL_MARKET_ORIGIN})`,
+  }
+}
+
+async function fetchJson(url: string, timeoutMs: number): Promise<unknown> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => { controller.abort() }, timeoutMs)
+  try {
+    const response = await fetch(url, { signal: controller.signal, headers: githubHeaders() })
+    if (!response.ok) throw new Error(`GitHub 返回 HTTP ${String(response.status)}。`)
+    const declared = Number(response.headers.get('content-length') ?? 0)
+    if (declared > MAX_JSON_BYTES) throw new Error('GitHub 响应过大。')
+    return await response.json()
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function fetchBytes(url: string, timeoutMs: number): Promise<Buffer> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => { controller.abort() }, timeoutMs)
+  try {
+    const response = await fetch(url, { signal: controller.signal, headers: githubHeaders() })
+    if (!response.ok) throw new Error(`GitHub 返回 HTTP ${String(response.status)}。`)
+    const declared = Number(response.headers.get('content-length') ?? 0)
+    if (declared > MAX_INSTALL_FILE_BYTES) throw new Error('技能文件过大。')
+    const bytes = Buffer.from(await response.arrayBuffer())
+    if (bytes.byteLength > MAX_INSTALL_FILE_BYTES) throw new Error('技能文件过大。')
+    return bytes
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function skillNameFromMarkdown(text: string): string {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/u.exec(text)
+  if (match === null) return ''
+  const name = /^name\s*:\s*["']?([^"'\r\n]+)["']?\s*$/mu.exec(match[1] ?? '')
+  return name?.[1]?.trim() ?? ''
+}
+
+function candidateDirectories(paths: readonly GithubTreeEntry[], skillId: string): string[] {
+  const dirs: string[] = []
+  for (const entry of paths) {
+    if (entry.type !== 'blob' || entry.path !== `${entry.path.split('/').slice(0, -1).join('/')}/SKILL.md`) continue
+    const dir = entry.path.slice(0, -'/SKILL.md'.length)
+    if (dir === '' || dir.split('/').includes('..')) continue
+    dirs.push(dir)
+  }
+  const score = (dir: string): number => {
+    const base = dir.split('/').pop() ?? ''
+    if (base === skillId) return 0
+    if (dir.split('/').includes(skillId)) return 1
+    if (base.toLowerCase() === skillId.toLowerCase()) return 2
+    return 3
+  }
+  return [...new Set(dirs)].sort((left, right) => score(left) - score(right) || left.length - right.length)
+}
+
+/**
+ * Download one Skill directory from GitHub. Nothing is written outside `directory`, symlinks and
+ * submodules are rejected, and the returned path is a temporary directory the caller owns.
+ * The caller imports it through the shell library (which copies), publishes a junction, and removes
+ * the temporary directory.
+ */
+export async function downloadSkillFromGithub(id: string, options: SkillMarketOptions = {}): Promise<SkillInstallResult> {
+  const clean = cleanId(id)
+  if (clean === undefined) throw new Error('无效的 Skill 标识。')
+  const [owner, repo, skillId] = clean.split('/') as [string, string, string]
+  const meta = await fetchJson(`https://api.github.com/repos/${owner}/${repo}`, 15_000)
+  const record = typeof meta === 'object' && meta !== null ? meta as Record<string, unknown> : {}
+  const branch = typeof record['default_branch'] === 'string' && record['default_branch'] !== '' ? record['default_branch'] : 'main'
+  const treePayload = await fetchJson(`https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`, 20_000)
+  const treeRecord = typeof treePayload === 'object' && treePayload !== null ? treePayload as Record<string, unknown> : {}
+  const entries = Array.isArray(treeRecord['tree']) ? treeRecord['tree'] : []
+  const blobs: GithubTreeEntry[] = []
+  for (const item of entries) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) continue
+    const entry = item as Record<string, unknown>
+    if (typeof entry['path'] !== 'string' || typeof entry['type'] !== 'string') continue
+    blobs.push({
+      path: entry['path'],
+      type: entry['type'],
+      ...(typeof entry['mode'] === 'string' ? { mode: entry['mode'] } : {}),
+      ...(typeof entry['size'] === 'number' ? { size: entry['size'] } : {}),
+    })
+  }
+  const candidates = candidateDirectories(blobs, skillId)
+  if (candidates.length === 0) throw new Error('GitHub 仓库里没有找到 SKILL.md。')
+  let chosen = ''
+  let chosenName = skillId
+  for (const dir of candidates.slice(0, 12)) {
+    const raw = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(branch)}/${dir.split('/').map(encodeURIComponent).join('/')}/SKILL.md`
+    const text = (await fetchBytes(raw, 15_000)).toString('utf8')
+    const name = skillNameFromMarkdown(text)
+    if (name !== '' && (name === skillId || name.toLowerCase() === skillId.toLowerCase())) {
+      chosen = dir
+      chosenName = name
+      break
+    }
+    if (chosen === '') {
+      chosen = dir
+      chosenName = name !== '' ? name : skillId
+    }
+  }
+  if (chosen === '') throw new Error('GitHub 仓库里没有找到可安装的 Skill。')
+  const prefix = `${chosen}/`
+  const files = blobs.filter((entry) => entry.type === 'blob' && entry.path.startsWith(prefix) && !entry.path.slice(prefix.length).split('/').includes('..'))
+  if (files.length === 0) throw new Error('技能目录为空。')
+  if (files.length > MAX_INSTALL_FILES) throw new Error(`技能文件过多（${String(files.length)}），已拒绝。`)
+  let total = 0
+  for (const file of files) {
+    if (file.mode === '120000') throw new Error('技能目录包含符号链接，已拒绝。')
+    const size = Number(file.size) || 0
+    if (size > MAX_INSTALL_FILE_BYTES) throw new Error(`技能文件过大：${file.path}`)
+    total += size
+  }
+  if (total > MAX_INSTALL_BYTES) throw new Error('技能目录过大，已拒绝。')
+
+  const directory = join(tmpdir(), `dsh-skill-${randomUUID().slice(0, 12)}`)
+  let downloaded = 0
+  try {
+    for (const file of files) {
+      const relative = file.path.slice(prefix.length)
+      if (relative === '' || relative.split('/').some((part) => part === '' || part === '.' || part === '..')) {
+        throw new Error('技能目录包含非法路径，已拒绝。')
+      }
+      const destination = join(directory, relative)
+      const raw = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(branch)}/${file.path.split('/').map(encodeURIComponent).join('/')}`
+      const bytes = await fetchBytes(raw, 20_000)
+      downloaded += bytes.byteLength
+      if (downloaded > MAX_INSTALL_BYTES) throw new Error('技能目录过大，已拒绝。')
+      await mkdir(dirname(destination), { recursive: true })
+      await writeFile(destination, bytes)
+    }
+    if (!existsSync(join(directory, 'SKILL.md'))) throw new Error('下载结果缺少 SKILL.md。')
+    return { directory, name: chosenName, files: files.length }
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true })
+    throw error
+  }
 }

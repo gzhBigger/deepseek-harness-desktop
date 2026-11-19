@@ -431,6 +431,8 @@ test('a library skill is copied once, then published as a removable junction', (
   assert.equal(global.target, globalTarget)
   assert.equal(lstatSync(globalTarget).isSymbolicLink(), true)
   assert.equal(store.listSkillPublications().length, 1)
+  assert.equal(store.removeLibrarySkill('library-skill').ok, false, 'published skills stay in the library')
+  assert.equal(existsSync(join(libraryRoot, 'library-skill', 'SKILL.md')), true)
 
   const projectRoot = join(root, 'library-project')
   mkdirSync(projectRoot, { recursive: true })
@@ -452,6 +454,47 @@ test('a library skill is copied once, then published as a removable junction', (
   symlinkSync(outside, outsideLink, 'junction')
   assert.equal(store.unpublishSkill('outside', outsideLink).ok, false, 'a non-publication link is refused')
   assert.equal(existsSync(outsideLink), true)
+})
+
+test('skill scopes expose both global roots and project roots, and publish into the chosen root', () => {
+  const home = join(root, 'scopes-home')
+  const libraryRoot = join(home, 'shell-library')
+  const agentsSkillsRoot = join(root, 'agents-home', 'skills')
+  const project = join(root, 'scope-project')
+  const source = join(root, 'scope-source')
+  mkdirSync(join(project, '.dsh', 'skills', 'dsh-project-skill'), { recursive: true })
+  mkdirSync(join(project, '.agents', 'skills', 'agents-project-skill'), { recursive: true })
+  mkdirSync(source, { recursive: true })
+  writeFileSync(join(project, '.dsh', 'skills', 'dsh-project-skill', 'SKILL.md'), '---\nname: dsh-project-skill\ndescription: dsh project\n---\n', 'utf8')
+  writeFileSync(join(project, '.agents', 'skills', 'agents-project-skill', 'SKILL.md'), '---\nname: agents-project-skill\ndescription: agents project\n---\n', 'utf8')
+  writeFileSync(join(source, 'SKILL.md'), '---\nname: scoped-skill\ndescription: scoped\n---\n', 'utf8')
+  mkdirSync(join(home, 'storages'), { recursive: true })
+  writeFileSync(join(home, 'storages', 'workspace.json'), JSON.stringify({ tables: { workspaces: { w1: { path: project, title: 'Scope Project' } } } }), 'utf8')
+
+  const store = createDshConfigStore({ home, libraryRoot, agentsSkillsRoot })
+  assert.deepEqual(store.listWorkspaces().map((item) => item.title), ['Scope Project'])
+  assert.deepEqual(store.listSkillScopes().map((group) => group.key), [
+    'global:dsh', 'global:agents', 'project:w1:dsh', 'project:w1:agents',
+  ])
+  assert.equal(store.listSkillScopes().find((group) => group.key === 'project:w1:agents')?.items[0]?.name, 'agents-project-skill')
+  assert.equal(store.importSkill(source, 'scoped-skill').ok, true)
+
+  const global = store.publishSkill('scoped-skill', { kind: 'global', root: 'agents' })
+  assert.equal(global.ok, true)
+  assert.equal(global.target, join(agentsSkillsRoot, 'scoped-skill'))
+  assert.equal(lstatSync(join(agentsSkillsRoot, 'scoped-skill')).isSymbolicLink(), true)
+  assert.equal(store.listSkillPublications()[0]?.root, 'agents')
+
+  const projectResult = store.publishSkill('scoped-skill', { kind: 'project', projectRoot: project, root: 'agents' })
+  assert.equal(projectResult.ok, true)
+  assert.equal(projectResult.target, join(project, '.agents', 'skills', 'scoped-skill'))
+  assert.equal(store.listSkillPublications().length, 2)
+  assert.equal(store.unpublishSkill('scoped-skill', projectResult.target ?? '').ok, true)
+  assert.equal(existsSync(join(project, '.agents', 'skills', 'scoped-skill')), false)
+  assert.equal(store.unpublishSkill('scoped-skill', global.target ?? '').ok, true)
+  assert.equal(store.listSkillPublications().length, 0)
+  assert.equal(store.removeLibrarySkill('scoped-skill').ok, true)
+  assert.equal(existsSync(join(libraryRoot, 'scoped-skill')), false)
 })
 
 test('a broken patch file is reported instead of overwritten', () => {
