@@ -292,6 +292,36 @@ test('a custom index is validated before it is saved, cached, and selected', asy
   assert.equal(service.sources().items.length, 0, 'a broken index is never saved')
 })
 
+test('a source without star counts falls back to newest and says so', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-market-no-stars-'))
+  const service = new MarketService({
+    profileDir: dir,
+    runtimeRoot: dir,
+    appExecutable: 'x',
+    stateDir: join(dir, '.market'),
+    fetchJsonImpl: () => Promise.resolve({
+      format: 1,
+      title: { zh: '无统计源' },
+      plugins: [
+        {
+          name: 'dsh-old',
+          versions: [{ version: '1.0.0', publishTimestamp: 1700000000, source: { type: 'npm' } }],
+          metadata: { sortKeys: {} },
+        },
+        {
+          name: 'dsh-new',
+          versions: [{ version: '1.0.0', publishTimestamp: 1800000000, source: { type: 'npm' } }],
+          metadata: { sortKeys: {} },
+        },
+      ],
+    }),
+  })
+  const added = await service.addSource('https://no-stars.example/index.json')
+  const browsed = await service.browse({ source: String(added.selected), sort: 'stars' })
+  assert.deepEqual(browsed.entries.map(entry => (entry as { name?: string }).name), ['dsh-new', 'dsh-old'])
+  assert.match(browsed.notice ?? '', /没有 Star 数据/u)
+})
+
 test('a failed refresh falls back to the cached index instead of emptying the market', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-market-stale-'))
   const stateDir = join(dir, '.market')

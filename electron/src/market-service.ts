@@ -373,6 +373,8 @@ export class MarketService {
     readonly source: { readonly id: string; readonly title: string; readonly kind: 'index' }
     readonly stale?: boolean
     readonly warning?: string
+    /** The requested sort could not be honored; the list was ordered another way. */
+    readonly notice?: string
     readonly categories: readonly { readonly id: string; readonly en?: string; readonly zh?: string }[]
     /** Entries per category over the whole catalog (a chip's number must not depend on the page). */
     readonly categoryCounts: Readonly<Record<string, number>>
@@ -390,7 +392,21 @@ export class MarketService {
     const loaded = await this.#catalog(source, getJson, request.refresh === true)
     const catalog = loaded.catalog
     const filtered = searchCatalog(filterByCategory(catalog.entries, request.category), request.query ?? '')
-    const sorted = sortCatalog(filtered, request.sort ?? 'stars')
+    const requestedSort = request.sort ?? 'stars'
+    // An index may publish no sort keys at all (the curated dsh-plugin-catalog does not). Sorting
+    // every entry with 0 would silently look broken, so fall back to the one key that is always
+    // present and tell the window why.
+    const missingSortData = filtered.length > 0 && (
+      (requestedSort === 'stars' && !filtered.some(entry => entry.stars > 0)) ||
+      (requestedSort === 'downloads' && !filtered.some(entry => entry.downloads > 0))
+    )
+    const effectiveSort = missingSortData ? 'added' : requestedSort
+    const sorted = sortCatalog(filtered, effectiveSort)
+    const notice = missingSortData
+      ? requestedSort === 'stars'
+        ? '当前市场源没有 Star 数据，已按最新收录排序。'
+        : '当前市场源没有下载量数据，已按最新收录排序。'
+      : undefined
     const pageSize = Math.min(120, Math.max(1, Math.trunc(request.pageSize ?? 40)))
     const page = Math.max(0, Math.trunc(request.page ?? 0))
     const start = page * pageSize
@@ -398,6 +414,7 @@ export class MarketService {
       source: { id: source.id, title: source.title, kind: source.kind },
       ...(loaded.stale ? { stale: true } : {}),
       ...(loaded.warning === undefined ? {} : { warning: loaded.warning }),
+      ...(notice === undefined ? {} : { notice }),
       categories: catalog.categories,
       categoryCounts: countByCategory(catalog.entries),
       ...(catalog.updated === undefined ? {} : { updated: catalog.updated }),

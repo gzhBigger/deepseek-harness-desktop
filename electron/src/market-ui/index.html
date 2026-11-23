@@ -870,6 +870,7 @@
           '只收录声明了 dsh 字段的插件',
         ]
         if (catalog.stale) parts.push('缓存副本')
+        if (catalog.notice) parts.push(catalog.notice)
         el('catalog-status').textContent = parts.join(' · ')
         if (catalog.warning) note('刷新失败，显示的是缓存')
         renderChips()
