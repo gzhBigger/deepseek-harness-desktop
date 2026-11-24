@@ -309,10 +309,7 @@
     }
     body {
       display: block; overflow: hidden;
-      background:
-        radial-gradient(900px 520px at 92% -8%, oklch(46% 0.12 225 / .18), transparent 66%),
-        radial-gradient(700px 480px at 8% 108%, oklch(48% 0.14 166 / .10), transparent 64%),
-        var(--bg);
+      background: var(--bg);
     }
     .app {
       display: grid; grid-template-columns: 286px minmax(0, 1fr);
@@ -322,13 +319,13 @@
     .topbar {
       grid-column: 1 / -1; grid-row: 1; display: flex; align-items: center;
       gap: 20px; padding: 22px 26px 14px; border-block-end: 1px solid var(--line-soft);
-      background: linear-gradient(180deg, oklch(23% 0.02 255 / .62), transparent);
+      background: var(--bg);
     }
     .title-lockup { display: flex; align-items: center; gap: 13px; min-inline-size: 0; }
     .brand-mark {
       inline-size: 34px; block-size: 34px; flex: none; border-radius: 11px;
-      background: linear-gradient(145deg, var(--accent), var(--accent-2));
-      box-shadow: 0 0 0 1px oklch(100% 0 0 / .12) inset, 0 10px 30px oklch(48% 0.13 166 / .24);
+      background: var(--accent);
+      box-shadow: 0 0 0 1px oklch(100% 0 0 / .12) inset;
       position: relative;
     }
     .brand-mark::after {
@@ -351,7 +348,7 @@
     .rail {
       grid-column: 1; grid-row: 3; min-block-size: 0; overflow: auto;
       padding: 26px 20px 24px; border-inline-end: 1px solid var(--line-soft);
-      background: linear-gradient(180deg, oklch(18% 0.018 255 / .68), oklch(13.5% 0.016 255 / .5));
+      background: var(--bg-deep);
       scrollbar-gutter: stable;
     }
     .rail-heading h2 { margin: 7px 0 4px; font-size: 17px; letter-spacing: -.01em; }
@@ -400,7 +397,7 @@
       margin: 0; min-inline-size: 0; block-size: 100%;
       display: flex; flex-direction: column; gap: 0;
       border: 1px solid var(--line-soft); border-radius: var(--r-md);
-      background: linear-gradient(160deg, oklch(23% 0.016 255), oklch(19% 0.014 255));
+      background: var(--surface);
       padding: 16px 16px 13px;
       box-shadow: 0 1px 0 oklch(100% 0 0 / .03) inset;
       transition: border-color var(--dur) var(--ease), transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
@@ -409,7 +406,7 @@
     .card-head { gap: 8px; align-items: flex-start; }
     .card-mark {
       inline-size: 31px; block-size: 31px; flex: none; display: grid; place-items: center;
-      border-radius: 9px; background: linear-gradient(145deg, oklch(34% 0.08 210), oklch(26% 0.04 255));
+      border-radius: 9px; background: var(--surface-2);
       color: var(--accent); font: 700 12px/1 var(--mono); border: 1px solid var(--line);
     }
     .card-title { flex: 1; min-inline-size: 0; font-size: 13.5px; line-height: 1.4; }
@@ -464,26 +461,17 @@
       --danger: oklch(52% 0.17 25);
       color-scheme: light;
     }
-    :root[data-theme="light"] body {
-      background:
-        radial-gradient(900px 520px at 92% -8%, oklch(72% 0.1 225 / .18), transparent 66%),
-        radial-gradient(700px 480px at 8% 108%, oklch(76% 0.12 166 / .12), transparent 64%),
-        var(--bg);
-    }
-    :root[data-theme="light"] .topbar {
-      background: linear-gradient(180deg, oklch(100% 0 0 / .82), transparent);
-    }
+    :root[data-theme="light"] body { background: var(--bg); }
+    :root[data-theme="light"] .topbar { background: var(--bg); }
     :root[data-theme="light"] .tabs {
       background: oklch(93% 0.008 250 / .95);
     }
-    :root[data-theme="light"] .rail {
-      background: linear-gradient(180deg, oklch(100% 0 0 / .82), oklch(95% 0.006 250 / .65));
-    }
+    :root[data-theme="light"] .rail { background: var(--bg-deep); }
     :root[data-theme="light"] footer {
       background: oklch(96% 0.006 250 / .9);
     }
     :root[data-theme="light"] .card {
-      background: linear-gradient(160deg, oklch(100% 0 0), oklch(97% 0.005 250));
+      background: var(--surface);
       box-shadow: 0 1px 0 oklch(100% 0 0 / .8) inset, 0 8px 24px oklch(30% 0.02 250 / .06);
     }
     :root[data-theme="light"] .card:hover {
@@ -495,10 +483,11 @@
       background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
     }
     :root[data-theme="light"] .card-mark {
-      background: linear-gradient(145deg, oklch(88% 0.06 210), oklch(93% 0.03 250));
+      background: var(--surface-2);
       color: oklch(45% 0.12 166);
     }
-    :root[data-theme="light"] .tag { background: var(--surface-2); }
+    :root[data-theme="light"] .tag { background: var(--surface-2); border-color: var(--line-soft); color: var(--muted); }
+    :root[data-theme="light"] .tag.ok { color: oklch(38% 0.12 155); border-color: oklch(82% 0.07 155); background: oklch(94% 0.04 155); }
     :root[data-theme="light"] .readme-bar { background: var(--surface-2); }
 
     @media (max-width: 980px) {

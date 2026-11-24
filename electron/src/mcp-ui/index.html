@@ -179,20 +179,17 @@
   body {
     display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
     color: var(--fg); font-size: 13.5px;
-    background:
-      radial-gradient(900px 500px at 92% -10%, oklch(46% 0.12 225 / .16), transparent 66%),
-      radial-gradient(700px 460px at 5% 110%, oklch(48% 0.14 166 / .09), transparent 64%),
-      var(--bg);
+    background: var(--bg);
   }
   header {
     display: flex; align-items: center; gap: 14px;
     padding: 21px 24px 16px; border-block-end: 1px solid var(--line-soft);
-    background: linear-gradient(180deg, oklch(23% 0.02 255 / .55), transparent);
+    background: var(--bg);
   }
   header::before {
     content: ""; inline-size: 34px; block-size: 34px; flex: none; border-radius: 11px;
-    background: linear-gradient(145deg, var(--accent), oklch(74% 0.12 235));
-    box-shadow: 0 0 0 1px oklch(100% 0 0 / .12) inset, 0 10px 30px oklch(48% 0.13 166 / .22);
+    background: var(--accent);
+    box-shadow: 0 0 0 1px oklch(100% 0 0 / .12) inset;
     position: relative;
   }
   h1 {
@@ -237,19 +234,22 @@
   .scroll { gap: 12px; }
   #serverList {
     display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 12px; align-items: start;
+    gap: 12px; align-items: stretch; grid-auto-flow: dense;
   }
-  #serverList .card { flex-direction: column; align-items: stretch; }
+  #serverList .card { flex-direction: column; align-items: stretch; block-size: 100%; }
   #serverList .card .actions { justify-content: flex-end; padding-block-start: 4px; }
   #skillList { display: flex; flex-direction: column; gap: 18px; }
   .skill-group {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
-    gap: 10px; align-items: start;
+    display: block; column-width: 270px; column-gap: 10px;
   }
-  .skill-group .scope-head { grid-column: 1 / -1; margin: 0 0 1px; }
-  .skill-group .card { flex-direction: column; align-items: stretch; border-inline-start: 3px solid var(--line); }
+  .skill-group .scope-head { column-span: all; margin: 0 0 8px; }
+  .skill-group .card {
+    display: flex; flex-direction: column; align-items: stretch;
+    inline-size: 100%; break-inside: avoid; margin-block-end: 10px;
+    border-inline-start: 3px solid var(--line);
+  }
   .card {
-    background: linear-gradient(160deg, oklch(23% 0.016 255), oklch(19% 0.014 255));
+    background: var(--surface);
     border: 1px solid var(--line-soft); border-radius: 13px; padding: 14px;
     box-shadow: 0 1px 0 oklch(100% 0 0 / .03) inset;
   }
@@ -263,6 +263,11 @@
   .tag.legacy, .badge.error { color: var(--warn); border-color: oklch(45% 0.08 86); background: oklch(24% 0.035 86); }
   .badge { background: var(--surface-2); border-color: var(--line-soft); color: var(--muted); }
   .badge.busy { color: var(--accent); border-color: oklch(45% 0.08 166); background: oklch(24% 0.04 166); }
+  :root[data-theme="light"] .tag.ok,
+  :root[data-theme="light"] .badge.ok { color: oklch(38% 0.12 155); border-color: oklch(82% 0.07 155); background: oklch(94% 0.04 155); }
+  :root[data-theme="light"] .tag.legacy,
+  :root[data-theme="light"] .badge.error { color: oklch(42% 0.1 80); border-color: oklch(84% 0.06 80); background: oklch(96% 0.035 80); }
+  :root[data-theme="light"] .badge.busy { color: oklch(38% 0.12 166); border-color: oklch(82% 0.06 166); background: oklch(95% 0.03 166); }
   .hint { color: var(--muted); }
   .scopebar button { background: var(--surface); }
   .scopebar button.active { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
@@ -325,19 +330,12 @@
     --danger: oklch(52% 0.17 25);
     color-scheme: light;
   }
-  :root[data-theme="light"] body {
-    background:
-      radial-gradient(900px 500px at 92% -10%, oklch(72% 0.1 225 / .18), transparent 66%),
-      radial-gradient(700px 460px at 5% 110%, oklch(76% 0.12 166 / .12), transparent 64%),
-      var(--bg);
-  }
-  :root[data-theme="light"] header {
-    background: linear-gradient(180deg, oklch(100% 0 0 / .84), transparent);
-  }
+  :root[data-theme="light"] body { background: var(--bg); }
+  :root[data-theme="light"] header { background: var(--bg); }
   :root[data-theme="light"] .tabs { background: oklch(93% 0.008 250 / .95); }
   :root[data-theme="light"] footer { background: oklch(96% 0.006 250 / .9); }
   :root[data-theme="light"] .card {
-    background: linear-gradient(160deg, oklch(100% 0 0), oklch(97% 0.005 250));
+    background: var(--surface);
     box-shadow: 0 1px 0 oklch(100% 0 0 / .8) inset, 0 8px 24px oklch(30% 0.02 250 / .06);
   }
   :root[data-theme="light"] .card:hover { border-color: var(--line); }
