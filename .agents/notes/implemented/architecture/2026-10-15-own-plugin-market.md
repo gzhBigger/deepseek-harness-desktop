@@ -209,9 +209,26 @@ Status: implemented
 
 **决定**：
 
-- **每张卡独立检查**：`MarketService.checkUpdate(name)` 只比较一个插件，`checkUpdates` 复用它；新增 `market:check-update` IPC/preload。打开已安装页只渲染「未检查」的本地事实，不发网络请求；每张卡点「检查更新」才请求。顶部「检查全部」保留为可选批量操作，逐项并发且每项完成即更新自己的卡。
+- **每张卡独立检查**：`MarketService.checkUpdate(name)` 只比较一个插件，`checkUpdates` 复用它；新增 `market:check-update` IPC/preload。打开已安装页先渲染「未检查」的本地事实，随后在后台只检查尚未检查的卡；每张卡独立完成、独立显示结果。顶部「检查全部」可强制复查，逐项并发且每项完成即更新自己的卡。
 - **状态诚实**：`checking` / `checked` / `reason` 分开；检查中显示「检查中…」，成功后「已最新 / 有新版」，registry 错误显示「检查失败」，link/git 等不可比较项显示「无法比较」。不再用「正在检查」伪装成不可比较。
 - **布局**：市场左栏 286 → 236px（窄屏 208px）；tabs 从悬浮胶囊改为整行下划线式，去掉 47px 偏移和 `fit-content`，active 用 accent 下划线；已安装视图仍隐藏 rail，tab 从 26px 起。
 - **放弃的方案**：① 保留全量检查但只把文案改成「检查中」——最强理由是最小改动；放弃是因为一个慢 registry 仍会拖住所有卡，用户无法只重试失败项。② 让每张卡自己直接访问 registry——页面 CSP 禁止网络，且凭据/超时只能留在主进程，违反现有桥边界。
 
 **证据**：`market-service.test.ts` 新增单插件检查与未知名字；`market-ui.test.ts` 断言 `checkOne`、`api.checkUpdate`、初始 `checked:false`、`#check` 文案「检查全部」且不再 `await api.updates()`。真实窗口：已安装页 6 张卡初始均「未检查」，点第一张后先「检查中…」再「已最新」；左栏 236px、tabs 整行下划线。全量 `npm test` 690/682/8/0，`typecheck`、`build` 通过。
+
+
+## 第九批：安装动作结束即释放进度，已安装页默认后台检查（2026-11-24）
+
+**问题**：用户从 GitHub 安装插件成功后，进度条一直不消失，随后想更新别的插件也被 `busy` 挡住；打开「已安装」页又不会自动检查新版本。
+
+**根因**：`githubAction()` 在 `api.installGithub()` 返回后先 `refreshInstalled()`，再 `await loadCatalog(catalog.page)`，而 `endProgress()` 只在 `finally`。这条 5 MB 目录重载把「安装已完成」和「UI 解锁」拖在一起；目录请求慢或挂起时，进度条和 `busy` 一起卡住。`refreshInstalledView()` 只初始化 `checked:false`，从未自动调用检查。
+
+**决定**：
+
+- `githubAction()` 在 `installGithub` 返回后立即 `endProgress()`；GitHub 安装成功不再重载整份目录，只用刚取回的 installed 状态本地重绘。已安装视图走 `refreshInstalledView()`，目录视图走 `renderCatalog()`。
+- `refreshInstalledView()` 先渲染「未检查」，再 `void checkAllUpdates(true)` 后台逐卡检查；`checkAllUpdates(onlyUnchecked=false)` 支持只查未检查项，且已安装为空时不会递归刷新。
+- 保留手动「检查全部」做强制复查；失败项仍可单卡重试。
+
+**放弃的方案**：① 在 `githubAction` 的 `finally` 里无条件 `endProgress()` 再等待目录——进度条会消失，但 `busy` 仍锁住，用户还是不能更新别的插件；② 把目录重载改成超时——只是把卡住时间变短，没消除不必要的网络请求。
+
+**证据**：`market-ui.test.ts` 新增「GitHub install ends progress before refreshing and never reloads the catalog」与「opening installed runs the unchecked checks in the background」；全量 `npm test` 692/684/8/0，`typecheck`、`build` 通过。真实 dev 窗口打开已安装页，7 张卡从「未检查」自动变为「已最新/有新版/无法比较」，无需点击。

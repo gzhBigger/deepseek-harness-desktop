@@ -1270,11 +1270,17 @@
         githubPending = ''
         beginProgress('正在从 GitHub 安装 ' + target + ' …')
         const result = await api.installGithub(target)
+        // pnpm is done here. The refresh below is only local state; hiding the progress bar now
+        // means a slow catalog reload can never make a finished install look stuck.
+        endProgress()
         if (result.ok) {
           closeGithubDialog()
           el('failure').hidden = true
           await refreshInstalled()
-          if (mode === 'catalog') await loadCatalog(catalog.page)
+          // Do not reload the 5 MB catalog here: the installed set is all these cards need, and
+          // waiting for the catalog was what kept the action slot locked after a GitHub install.
+          if (view === 'installed') await refreshInstalledView()
+          else if (mode === 'catalog') renderCatalog()
           else render()
           // After the refresh, like the registry path: otherwise its status line wins.
           note(result.name + ' 已安装（重启应用后生效）')
@@ -1470,9 +1476,17 @@
       report('checked ' + name)
     }
 
-    async function checkAllUpdates() {
-      if (updateStatuses.length === 0) await refreshInstalledView()
-      await Promise.all(updateStatuses.map(item => checkOne(item.name)))
+    async function checkAllUpdates(onlyUnchecked = false) {
+      if (updateStatuses.length === 0) {
+        // Auto-check runs right after refreshInstalledView(); refreshing again here would recurse
+        // forever when there are no installed plugins.
+        if (!onlyUnchecked) await refreshInstalledView()
+        return
+      }
+      const targets = onlyUnchecked
+        ? updateStatuses.filter(item => !item.checked && !item.checking)
+        : updateStatuses
+      await Promise.all(targets.map(item => checkOne(item.name)))
     }
 
     async function refreshLog() {
@@ -1540,6 +1554,10 @@
       }))
       renderInstalled()
       report(`rendered ${updateStatuses.length} installed cards`)
+      // Render the honest "未检查" state first, then check in the background. Each card keeps its
+      // own pending/result state, so opening the tab needs no second click and one slow registry
+      // cannot hold the other cards' results hostage.
+      void checkAllUpdates(true)
       await refreshLog().catch(() => {})
       await refreshDiagnosis().catch(() => {})
       note('已安装 ' + String(updateStatuses.length) + ' 个插件')

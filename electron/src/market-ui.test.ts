@@ -75,6 +75,21 @@ test('installed updates are checked per card, not by marking every card while on
   assert.doesNotMatch(script, /updateStatuses = await api\.updates\(\)/u)
 })
 
+test('opening installed runs the unchecked checks in the background', () => {
+  assert.match(script, /void checkAllUpdates\(true\)/u)
+  assert.match(script, /async function checkAllUpdates\(onlyUnchecked = false\)/u)
+  assert.match(script, /!item\.checked && !item\.checking/u)
+})
+
+test('GitHub install ends progress before refreshing and never reloads the catalog', () => {
+  const start = script.indexOf('async function githubAction')
+  assert.ok(start !== -1)
+  const end = script.indexOf('async function act', start)
+  const action = script.slice(start, end)
+  assert.match(action, /const result = await api\.installGithub\(target\)[\s\S]*?endProgress\(\)/u)
+  assert.doesNotMatch(action, /loadCatalog\(/u)
+})
+
 test('the page reports what it rendered', () => {
   assert.match(script, /api\.note\(/u, 'the page must report its render, so a blank market is detectable')
   assert.match(script, /rendered \$\{catalog\.entries\.length\} cards of \$\{catalog\.total\}/u)
