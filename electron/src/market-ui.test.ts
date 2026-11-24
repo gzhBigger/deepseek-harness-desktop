@@ -23,7 +23,7 @@ import { test } from 'node:test'
 
 const page = readFileSync(fileURLToPath(new URL('./market-ui/index.html', import.meta.url)), 'utf8')
 const script = /<script>([\s\S]*)<\/script>/u.exec(page)?.[1] ?? ''
-const markup = page.slice(0, page.indexOf('<script>'))
+const markup = page.replace(/<script>[\s\S]*?<\/script>/gu, '')
 
 test('the page carries exactly one style block, and it is in the head', () => {
   const styles = page.match(/<style\b/gu) ?? []

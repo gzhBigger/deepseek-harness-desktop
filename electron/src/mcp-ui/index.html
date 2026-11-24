@@ -4,6 +4,17 @@
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:" />
 <title>MCP 与 Skills</title>
+<script>
+  (() => {
+    try {
+      const saved = localStorage.getItem('dsh-ui-theme')
+      const preferred = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+      document.documentElement.dataset.theme = saved === 'light' || saved === 'dark' ? saved : preferred
+    } catch {
+      document.documentElement.dataset.theme = 'dark'
+    }
+  })()
+</script>
 <style>
   :root {
     --bg: #ffffff; --fg: #1c1e21; --muted: #6b7280; --line: #e5e7eb; --panel: #f7f8fa;
@@ -286,6 +297,52 @@
     background: oklch(13% 0.018 255 / .82); backdrop-filter: blur(14px);
   }
   #statusBar { color: var(--muted); }
+  .theme-toggle {
+    flex: none; inline-size: 32px; block-size: 32px; padding: 0;
+    border-radius: 50%; color: var(--muted); background: var(--surface);
+    border: 1px solid var(--line-soft); font-size: 15px; line-height: 1;
+  }
+  .theme-toggle:hover { color: var(--fg); border-color: var(--accent); }
+
+  /* Light mode. Follows the OS until the header toggle is used. */
+  :root[data-theme="light"] {
+    --bg: oklch(98% 0.004 250);
+    --bg-deep: oklch(95% 0.006 250);
+    --fg: oklch(24% 0.018 250);
+    --fg-2: oklch(38% 0.018 250);
+    --muted: oklch(50% 0.018 250);
+    --faint: oklch(60% 0.016 250);
+    --line: oklch(84% 0.01 250);
+    --line-soft: oklch(91% 0.008 250);
+    --panel: oklch(96.5% 0.006 250);
+    --surface: oklch(100% 0 0);
+    --surface-2: oklch(96.5% 0.006 250);
+    --brand: oklch(52% 0.16 265);
+    --accent: oklch(62% 0.14 166);
+    --accent-ink: oklch(99% 0.004 166);
+    --ok: oklch(48% 0.13 155);
+    --warn: oklch(55% 0.13 80);
+    --danger: oklch(52% 0.17 25);
+    color-scheme: light;
+  }
+  :root[data-theme="light"] body {
+    background:
+      radial-gradient(900px 500px at 92% -10%, oklch(72% 0.1 225 / .18), transparent 66%),
+      radial-gradient(700px 460px at 5% 110%, oklch(76% 0.12 166 / .12), transparent 64%),
+      var(--bg);
+  }
+  :root[data-theme="light"] header {
+    background: linear-gradient(180deg, oklch(100% 0 0 / .84), transparent);
+  }
+  :root[data-theme="light"] .tabs { background: oklch(93% 0.008 250 / .95); }
+  :root[data-theme="light"] footer { background: oklch(96% 0.006 250 / .9); }
+  :root[data-theme="light"] .card {
+    background: linear-gradient(160deg, oklch(100% 0 0), oklch(97% 0.005 250));
+    box-shadow: 0 1px 0 oklch(100% 0 0 / .8) inset, 0 8px 24px oklch(30% 0.02 250 / .06);
+  }
+  :root[data-theme="light"] .card:hover { border-color: var(--line); }
+  :root[data-theme="light"] .market-modal::backdrop { background: oklch(30% 0.02 255 / .35); }
+
   @media (max-width: 900px) {
     .app, body { grid-template-columns: 1fr; }
     header { padding-inline: 18px; }
@@ -304,6 +361,7 @@
       <button type="button" id="tabSkills">Skills</button>
       <button type="button" id="tabMarket">Skill 市场</button>
     </div>
+    <button id="themeToggle" class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">☀</button>
   </header>
 
   <main>
@@ -457,6 +515,21 @@
   <script>
     const api = window.__DSH_MCP__
     const $ = (id) => document.getElementById(id)
+
+    function applyTheme(theme) {
+      document.documentElement.dataset.theme = theme
+      const button = $('themeToggle')
+      button.textContent = theme === 'light' ? '☾' : '☀'
+      button.title = theme === 'light' ? '切换到深色' : '切换到浅色'
+      button.setAttribute('aria-label', button.title)
+    }
+
+    applyTheme(document.documentElement.dataset.theme === 'light' ? 'light' : 'dark')
+    $('themeToggle').addEventListener('click', () => {
+      const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'
+      try { localStorage.setItem('dsh-ui-theme', next) } catch {}
+      applyTheme(next)
+    })
     let editingId = null
     let servers = []
     // The Node executable the shell detected (empty when there is none). `nodeLoaded` lets the hint

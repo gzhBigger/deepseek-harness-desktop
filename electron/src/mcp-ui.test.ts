@@ -13,8 +13,9 @@ import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 
 const page = readFileSync(fileURLToPath(new URL('./mcp-ui/index.html', import.meta.url)), 'utf8')
-const script = /<script>([\s\S]*)<\/script>/u.exec(page)?.[1] ?? ''
-const markup = page.slice(0, page.indexOf('<script>'))
+const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/gu)].map(match => match[1])
+const script = scripts.at(-1) ?? ''
+const markup = page.replace(/<script>[\s\S]*?<\/script>/gu, '')
 
 test('CSP allows no network, and the page has one style block', () => {
   assert.match(page, /Content-Security-Policy[^>]*default-src 'none'/u)
