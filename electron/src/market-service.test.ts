@@ -238,6 +238,23 @@ test('checkUpdates compares registry versions and refuses to guess for checkouts
   assert.equal(kit?.hasUpdate, false)
   assert.match(kit?.reason ?? '', /无法比较/u)
 })
+
+test('checkUpdate checks one installed plugin and explains an unknown name', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-market-profile-'))
+  writeProfileManifest(dir, { dependencies: { 'dsh-cost-meter': '^1.8.26', 'dsh-plugin-kit': 'link:D:/x' } })
+  const service = new MarketService({
+    profileDir: dir,
+    runtimeRoot: dir,
+    appExecutable: 'x',
+    fetchJsonImpl: url => Promise.resolve(url.includes('dsh-cost-meter') ? { 'dist-tags': { latest: '1.9.0' } } : { 'dist-tags': { latest: '1.0.2' } }),
+  })
+  const meter = await service.checkUpdate('dsh-cost-meter')
+  assert.equal(meter.hasUpdate, true)
+  assert.equal(meter.latest, '1.9.0')
+  const missing = await service.checkUpdate('not-installed')
+  assert.equal(missing.source, 'other')
+  assert.match(missing.reason ?? '', /没有安装/u)
+})
 test('a custom index is validated before it is saved, cached, and selected', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-market-sources-'))
   const stateDir = join(dir, '.market')

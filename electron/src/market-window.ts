@@ -199,6 +199,11 @@ export class MarketWindow {
     ipcMain.handle(MARKET_IPC.updates, (event): Promise<readonly MarketUpdateStatusResponse[]> =>
       Promise.resolve(guard(event, () => service.checkUpdates())))
 
+    ipcMain.handle(MARKET_IPC.checkUpdate, (event, name: unknown): Promise<MarketUpdateStatusResponse> =>
+      Promise.resolve(guard(event, () => service.checkUpdate(
+        typeof name === 'string' && name !== '' ? name : '',
+      ))))
+
     ipcMain.handle(MARKET_IPC.log, (event, limit: unknown): MarketLogResponse =>
       guard(event, () => {
         const wanted = typeof limit === 'number' && Number.isFinite(limit) ? Math.min(400, Math.max(1, Math.trunc(limit))) : 50

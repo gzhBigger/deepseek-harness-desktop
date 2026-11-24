@@ -67,6 +67,14 @@ test('the market chrome is switched as blocks, so a view never keeps another vie
   assert.ok(blocks.length >= 4, `expected the toolbar, chips, status and skipped blocks marked: found ${String(blocks.length)}`)
 })
 
+test('installed updates are checked per card, not by marking every card while one request runs', () => {
+  assert.match(script, /async function checkOne\(/u)
+  assert.match(script, /api\.checkUpdate\(/u)
+  assert.match(script, /checked: false/u)
+  assert.match(script, /id="check"[^>]*>检查全部/u)
+  assert.doesNotMatch(script, /updateStatuses = await api\.updates\(\)/u)
+})
+
 test('the page reports what it rendered', () => {
   assert.match(script, /api\.note\(/u, 'the page must report its render, so a blank market is detectable')
   assert.match(script, /rendered \$\{catalog\.entries\.length\} cards of \$\{catalog\.total\}/u)

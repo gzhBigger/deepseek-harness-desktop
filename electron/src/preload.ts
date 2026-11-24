@@ -206,6 +206,7 @@ if (isMarketDocument()) {
     removeSource: (id: string) => ipcRenderer.invoke(MARKET_IPC.removeSource, id) as Promise<unknown>,
     profileDir: () => ipcRenderer.invoke(MARKET_IPC.profileDir) as Promise<string>,
     updates: () => ipcRenderer.invoke(MARKET_IPC.updates) as Promise<unknown>,
+    checkUpdate: (name: string) => ipcRenderer.invoke(MARKET_IPC.checkUpdate, name) as Promise<unknown>,
     log: (limit?: number) => ipcRenderer.invoke(MARKET_IPC.log, limit) as Promise<unknown>,
     diagnose: () => ipcRenderer.invoke(MARKET_IPC.diagnose) as Promise<unknown>,
     browse: (request: unknown) => ipcRenderer.invoke(MARKET_IPC.browse, request) as Promise<unknown>,

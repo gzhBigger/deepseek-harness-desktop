@@ -202,3 +202,16 @@ Status: implemented
 **放弃的方案**：① 只给用户一个「去用 dsh-market」的答复——最强理由是零代码；放弃是因为我们已经有源机制，缺的只是解析分支。② 把富目录转成 format 1 再喂旧解析器——会丢掉 `stars`/`downloads`，正是用户要的字段。③ 在壳里逐条请求 GitHub API 补齐 Star——6554/12960 条会触发限流且打开极慢；富目录已经预计算，没有理由重算。
 
 **证据**：`market-index-source.test.ts` 的 rich catalog 用例断言 stars=42、`downloads` 回退 GitHub release 下载数 5678；`market-service.test.ts` 断言无 `format` 的富目录可添加、`browse` 按 stars 排序、源标题为 `awesome-dsh-plugin`。市场测试 30/30，全量 688/680/8/0，`typecheck`、`build` 通过。
+
+## 第八批：逐插件检查更新与市场导航重排（2026-11-24）
+
+**问题**：用户打开「已安装」时，旧实现用一个 `api.updates()` 并行检查全部插件；等待期间把所有卡片先填成 `source: 'other'`、`reason: '正在检查版本'`，于是每张卡都显示「无法比较」。用户要求每个插件能独立检查，并指出左侧市场源栏太宽、两个 tab 的胶囊样式也不合适。
+
+**决定**：
+
+- **每张卡独立检查**：`MarketService.checkUpdate(name)` 只比较一个插件，`checkUpdates` 复用它；新增 `market:check-update` IPC/preload。打开已安装页只渲染「未检查」的本地事实，不发网络请求；每张卡点「检查更新」才请求。顶部「检查全部」保留为可选批量操作，逐项并发且每项完成即更新自己的卡。
+- **状态诚实**：`checking` / `checked` / `reason` 分开；检查中显示「检查中…」，成功后「已最新 / 有新版」，registry 错误显示「检查失败」，link/git 等不可比较项显示「无法比较」。不再用「正在检查」伪装成不可比较。
+- **布局**：市场左栏 286 → 236px（窄屏 208px）；tabs 从悬浮胶囊改为整行下划线式，去掉 47px 偏移和 `fit-content`，active 用 accent 下划线；已安装视图仍隐藏 rail，tab 从 26px 起。
+- **放弃的方案**：① 保留全量检查但只把文案改成「检查中」——最强理由是最小改动；放弃是因为一个慢 registry 仍会拖住所有卡，用户无法只重试失败项。② 让每张卡自己直接访问 registry——页面 CSP 禁止网络，且凭据/超时只能留在主进程，违反现有桥边界。
+
+**证据**：`market-service.test.ts` 新增单插件检查与未知名字；`market-ui.test.ts` 断言 `checkOne`、`api.checkUpdate`、初始 `checked:false`、`#check` 文案「检查全部」且不再 `await api.updates()`。真实窗口：已安装页 6 张卡初始均「未检查」，点第一张后先「检查中…」再「已最新」；左栏 236px、tabs 整行下划线。全量 `npm test` 690/682/8/0，`typecheck`、`build` 通过。

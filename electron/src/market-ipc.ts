@@ -19,6 +19,8 @@ export const MARKET_IPC = {
   act: 'market:act',
   /** Compare installed plugins against the registry. */
   updates: 'market:updates',
+  /** Compare one installed plugin against the registry (the per-card check). */
+  checkUpdate: 'market:check-update',
   /** The tail of the action log, plus where the file lives. */
   log: 'market:log',
   /** Contradictions this profile can be proven to have. */

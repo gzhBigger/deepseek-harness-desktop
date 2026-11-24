@@ -312,7 +312,7 @@
       background: var(--bg);
     }
     .app {
-      display: grid; grid-template-columns: 286px minmax(0, 1fr);
+      display: grid; grid-template-columns: 236px minmax(0, 1fr);
       grid-template-rows: auto auto minmax(0, 1fr) auto;
       block-size: 100dvh; min-block-size: 0;
     }
@@ -338,13 +338,20 @@
     .profile { color: var(--faint); font: var(--t-xs)/1.4 var(--mono); }
     .topbar .profile { margin-inline-start: auto; }
     .tabs {
-      grid-column: 1 / -1; grid-row: 2; padding: 12px 26px 0;
-      inline-size: fit-content; margin-inline-start: 47px;
-      gap: 4px; border-radius: var(--r-pill); background: oklch(18% 0.014 255 / .9);
-      box-shadow: 0 0 0 1px var(--line-soft) inset;
+      grid-column: 1 / -1; grid-row: 2; box-sizing: border-box;
+      display: flex; gap: 18px; padding: 5px 26px 0;
+      margin-inline-start: 0; border-block-end: 1px solid var(--line-soft);
+      inline-size: 100%; background: transparent; border-radius: 0; box-shadow: none;
     }
-    .tab { padding: 7px 18px; border: 0; border-radius: var(--r-pill); color: var(--muted); font-weight: 550; }
-    .tab[aria-selected="true"] { background: var(--surface-2); color: var(--fg); box-shadow: 0 0 0 1px var(--line) inset; }
+    .tab {
+      padding: 7px 1px 11px; border: 0; border-block-end: 2px solid transparent;
+      border-radius: 0; background: transparent; color: var(--muted); font-weight: 550;
+    }
+    .tab:hover { color: var(--fg-2); }
+    .tab[aria-selected="true"] {
+      background: transparent; color: var(--fg);
+      border-block-end-color: var(--accent); box-shadow: none;
+    }
     .rail {
       grid-column: 1; grid-row: 3; min-block-size: 0; overflow: auto;
       padding: 26px 20px 24px; border-inline-end: 1px solid var(--line-soft);
@@ -464,7 +471,7 @@
     :root[data-theme="light"] body { background: var(--bg); }
     :root[data-theme="light"] .topbar { background: var(--bg); }
     :root[data-theme="light"] .tabs {
-      background: oklch(93% 0.008 250 / .95);
+      background: transparent;
     }
     :root[data-theme="light"] .rail { background: var(--bg-deep); }
     :root[data-theme="light"] footer {
@@ -491,10 +498,10 @@
     :root[data-theme="light"] .readme-bar { background: var(--surface-2); }
 
     @media (max-width: 980px) {
-      .app { grid-template-columns: 230px minmax(0, 1fr); }
+      .app { grid-template-columns: 208px minmax(0, 1fr); }
       .workspace { padding-inline: 18px; }
       .topbar { padding-inline: 20px; }
-      .tabs { margin-inline-start: 41px; padding-inline: 20px; }
+      .tabs { padding-inline: 20px; }
     }
     body[data-view="installed"] .app { grid-template-columns: minmax(0, 1fr); }
     body[data-view="installed"] .rail { display: none; }
@@ -613,7 +620,7 @@
        is anything newer, and what happened the last time I installed something". -->
   <section id="installed-view" hidden>
     <div class="toolbar">
-      <button id="check" class="primary">检查更新</button>
+      <button id="check" class="primary">检查全部</button>
       <span class="grow"></span>
       <span id="installed-count" class="profile" style="flex:none;direction:ltr"></span>
     </div>
@@ -1387,7 +1394,10 @@
     }
 
     function versionLine(entry) {
+      if (entry.checking) return entry.current + '（正在检查…）'
+      if (!entry.checked) return entry.current + '（尚未检查）'
       if (entry.source !== 'registry') return entry.current + '（' + (entry.reason || '不是 registry 版本') + '）'
+      if (entry.reason) return entry.current + '（检查失败：' + entry.reason + '）'
       if (entry.latest === undefined || entry.latest === '') return entry.current + '（registry 未报告最新版）'
       if (entry.hasUpdate) return entry.current + ' → ' + entry.latest
       return entry.current + '（已是最新）'
@@ -1398,11 +1408,28 @@
       host.replaceChildren()
       el('installed-count').textContent = updateStatuses.length === 0 ? '没有已安装的插件' : String(updateStatuses.length) + ' 个已安装'
       for (const entry of updateStatuses) {
-        const tone = entry.hasUpdate ? 'warn' : entry.source === 'registry' ? 'ok' : undefined
-        const card = cardShell(entry.name, [{ text: entry.hasUpdate ? '有新版' : entry.source === 'registry' ? '已最新' : '无法比较', tone }])
+        const failed = entry.checked && entry.reason !== undefined && entry.reason !== ''
+        const tone = entry.checking ? undefined : entry.hasUpdate ? 'warn' : entry.checked && entry.source === 'registry' && !failed ? 'ok' : undefined
+        const badge = entry.checking
+          ? '检查中…'
+          : !entry.checked
+            ? '未检查'
+            : entry.hasUpdate
+              ? '有新版'
+              : failed
+                ? entry.source === 'registry' ? '检查失败' : '无法比较'
+                : entry.source === 'registry'
+                  ? '已最新'
+                  : '无法比较'
+        const card = cardShell(entry.name, [{ text: badge, tone }])
         metaLine(card, [versionLine(entry)])
         const actions = document.createElement('div')
         actions.className = 'card-actions'
+        const check = document.createElement('button')
+        check.textContent = entry.checking ? '检查中…' : '检查更新'
+        check.disabled = entry.checking
+        check.addEventListener('click', () => void checkOne(entry.name))
+        actions.append(check)
         if (entry.hasUpdate && entry.latest !== undefined) {
           const update = document.createElement('button')
           update.className = 'primary'
@@ -1421,6 +1448,31 @@
         card.append(actions)
         host.append(card)
       }
+    }
+
+    async function checkOne(name) {
+      const entry = updateStatuses.find(item => item.name === name)
+      if (entry === undefined || entry.checking) return
+      entry.checking = true
+      renderInstalled()
+      const result = await api.checkUpdate(name).catch(error => ({
+        name,
+        current: entry.current,
+        hasUpdate: false,
+        source: 'other',
+        reason: error instanceof Error ? error.message : String(error),
+      }))
+      const index = updateStatuses.findIndex(item => item.name === name)
+      if (index !== -1) {
+        updateStatuses[index] = { ...updateStatuses[index], ...result, checking: false, checked: true }
+        renderInstalled()
+      }
+      report('checked ' + name)
+    }
+
+    async function checkAllUpdates() {
+      if (updateStatuses.length === 0) await refreshInstalledView()
+      await Promise.all(updateStatuses.map(item => checkOne(item.name)))
     }
 
     async function refreshLog() {
@@ -1476,25 +1528,16 @@
     }
 
     async function refreshInstalledView() {
-      note('正在检查已安装插件的版本…')
-      // Paint the installed list immediately from the profile facts we already have. The registry
-      // check below only changes the version badges; it must not hold the whole page hostage.
-      if (installed.size > 0) {
-        updateStatuses = Array.from(installed, ([name, meta]) => ({
-          name,
-          current: meta.version || meta.spec,
-          hasUpdate: false,
-          source: 'other',
-          reason: '正在检查版本',
-        }))
-        renderInstalled()
-      } else {
-        el('installed-list').replaceChildren()
-        const block = document.createElement('div')
-        block.className = 'skeleton'
-        el('installed-list').append(block)
-      }
-      updateStatuses = await api.updates().catch(() => updateStatuses)
+      note('加载已安装插件…')
+      await refreshInstalled().catch(() => {})
+      updateStatuses = Array.from(installed, ([name, meta]) => ({
+        name,
+        current: meta.version || meta.spec,
+        hasUpdate: false,
+        source: 'other',
+        checked: false,
+        checking: false,
+      }))
       renderInstalled()
       report(`rendered ${updateStatuses.length} installed cards`)
       await refreshLog().catch(() => {})
@@ -1593,7 +1636,7 @@
 
     el('tab-market').addEventListener('click', () => switchView('market'))
     el('tab-installed').addEventListener('click', () => switchView('installed'))
-    el('check').addEventListener('click', () => void refreshInstalledView())
+    el('check').addEventListener('click', () => void checkAllUpdates())
     el('refresh-log').addEventListener('click', () => void refreshLog())
     el('refresh-diagnose').addEventListener('click', () => void refreshDiagnosis())
     el('copy-diagnose').addEventListener('click', async () => {

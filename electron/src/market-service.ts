@@ -734,29 +734,41 @@ export class MarketService {
    * silently looking up to date — a wrong "up to date" is worse than an honest "unknown".
    */
   async checkUpdates(): Promise<readonly MarketUpdateStatus[]> {
-    const getJson = this.#options.fetchJsonImpl ?? (url => fetchJson(url))
     // One plugin per registry request; do them together so the installed view does not spend
     // N × the fetch timeout waiting for the slowest registry before it can render anything.
-    return await Promise.all(this.installed().map(async (entry): Promise<MarketUpdateStatus> => {
-      const source = specSource(entry.spec)
-      if (source !== 'registry') {
-        return { name: entry.name, current: entry.spec, hasUpdate: false, source, reason: '不是 registry 版本，无法比较' }
+    return await Promise.all(this.installed().map(entry => this.checkUpdate(entry.name)))
+  }
+
+  /**
+   * Compare one installed plugin against the registry.
+   *
+   * The installed view calls this per card, so one slow or unreachable registry entry only changes
+   * that card. `checkUpdates` is the same work for every card, kept for the "check all" action.
+   */
+  async checkUpdate(name: string): Promise<MarketUpdateStatus> {
+    const entry = this.installed().find(item => item.name === name)
+    if (entry === undefined) {
+      return { name, current: '', hasUpdate: false, source: 'other', reason: '没有安装这个插件' }
+    }
+    const source = specSource(entry.spec)
+    if (source !== 'registry') {
+      return { name: entry.name, current: entry.spec, hasUpdate: false, source, reason: '不是 registry 版本，无法比较' }
+    }
+    const current = stripRangePrefix(entry.spec)
+    try {
+      const getJson = this.#options.fetchJsonImpl ?? (url => fetchJson(url))
+      const document = await getJson(packumentUrl(entry.name))
+      const latest = latestVersion(document)
+      return {
+        name: entry.name,
+        current,
+        ...(latest === undefined ? {} : { latest }),
+        hasUpdate: latest !== undefined && compareVersions(latest, current) > 0,
+        source: 'registry',
       }
-      const current = stripRangePrefix(entry.spec)
-      try {
-        const document = await getJson(packumentUrl(entry.name))
-        const latest = latestVersion(document)
-        return {
-          name: entry.name,
-          current,
-          ...(latest === undefined ? {} : { latest }),
-          hasUpdate: latest !== undefined && compareVersions(latest, current) > 0,
-          source: 'registry',
-        }
-      } catch (error) {
-        return { name: entry.name, current, hasUpdate: false, source: 'registry', reason: error instanceof Error ? error.message : String(error) }
-      }
-    }))
+    } catch (error) {
+      return { name: entry.name, current, hasUpdate: false, source: 'registry', reason: error instanceof Error ? error.message : String(error) }
+    }
   }
 
   /**
