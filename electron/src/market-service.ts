@@ -18,7 +18,7 @@ import { join } from 'node:path'
 
 import { packumentUrl, searchMarketPackages, type MarketSearchResult } from './market-catalog.ts'
 import { countByCategory, filterByCategory, searchCatalog, sortCatalog, type Catalog, type CatalogSort } from './market-catalog-source.ts'
-import { indexTitle, parseIndexCatalog } from './market-index-source.ts'
+import { marketCatalogTitle, parseMarketCatalog } from './market-index-source.ts'
 import {
   allSources,
   emptyStoredSources,
@@ -318,14 +318,14 @@ export class MarketService {
     const getJson = this.#options.fetchJsonImpl ?? (target => fetchJson(target))
     try {
       const document = await getJson(url)
-      const catalog = parseIndexCatalog(document, url)
+      const catalog = parseMarketCatalog(document, url)
       const id = sourceId(url)
       const custom = [
         ...state.custom,
         {
           id,
           url,
-          title: indexTitle(document, sourceFallbackTitle(url)),
+          title: marketCatalogTitle(document, sourceFallbackTitle(url)),
           addedAt: new Date().toISOString(),
         },
       ]
@@ -461,7 +461,7 @@ export class MarketService {
   }
 
   async #fetchSource(source: MarketSource, getJson: JsonFetcher): Promise<Catalog> {
-    return parseIndexCatalog(await getJson(source.url), source.url)
+    return parseMarketCatalog(await getJson(source.url), source.url)
   }
 
   /** Refresh one stale source in the background; failures leave the cached copy in place. */

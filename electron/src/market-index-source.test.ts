@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { indexTitle, parseIndexCatalog } from './market-index-source.ts'
+import { indexTitle, marketCatalogTitle, parseIndexCatalog, parseMarketCatalog } from './market-index-source.ts'
 
 const COMMIT = '0123456789abcdef0123456789abcdef01234567'
 
@@ -74,8 +74,37 @@ test('an official index turns npm and Git versions into installable cards', () =
   assert.equal(git?.install, git?.spec)
 })
 
-test('a malformed version is skipped; a malformed document is rejected', () => {
-  const catalog = parseIndexCatalog({
+test('the rich community catalog keeps its precomputed stars and downloads', () => {
+  const catalog = parseMarketCatalog({
+    name: 'awesome-dsh-plugin',
+    updated: '2026-11-24',
+    plugins: [
+      {
+        name: 'dsh-plugin-rich',
+        owner: 'acme',
+        url: 'https://github.com/acme/dsh-plugin-rich',
+        category: 'tools',
+        description: { en: 'Rich entry', zh: '丰富条目' },
+        npm: 'dsh-plugin-rich',
+        stars: 42,
+        downloads: null,
+        githubReleaseDownloads: 5678,
+        added: '2026-11-20',
+        version: '1.2.3',
+      },
+    ],
+  }, 'https://awesome-dsh-plugin.com/plugins.json')
+
+  assert.equal(marketCatalogTitle({ name: 'awesome-dsh-plugin' }, 'fallback'), 'awesome-dsh-plugin')
+  assert.equal(catalog.entries.length, 1)
+  assert.equal(catalog.entries[0]?.name, 'dsh-plugin-rich')
+  assert.equal(catalog.entries[0]?.stars, 42)
+  assert.equal(catalog.entries[0]?.downloads, 5678)
+  assert.equal(catalog.entries[0]?.version, '1.2.3')
+  assert.equal(catalog.entries[0]?.npm, 'dsh-plugin-rich')
+})
+
+test('a malformed version is skipped; a malformed document is rejected', () => {  const catalog = parseIndexCatalog({
     format: 1,
     plugins: [
       {

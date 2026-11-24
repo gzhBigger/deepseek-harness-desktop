@@ -140,7 +140,11 @@ export function parseCatalog(document: unknown): Catalog {
     entries.push({
       name,
       stars: count(entry.stars),
-      downloads: count(entry.downloads),
+      // The rich community catalog carries npm downloads for published
+      // packages and GitHub Release asset downloads for GitHub-only entries.
+      // The market card has one "downloads" number, so use the latter as a
+      // fallback instead of showing zero for every GitHub-only plugin.
+      downloads: count(entry.downloads) || count(entry.githubReleaseDownloads),
       capabilities: strings(entry.capabilities),
       ...(owner === undefined ? {} : { owner }),
       ...(url === undefined ? {} : { url }),

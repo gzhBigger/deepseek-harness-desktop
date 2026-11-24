@@ -192,3 +192,13 @@ Status: implemented
 - `market-service.test.ts`：added.items 长度 1、remove 后 0/空、坏源不保存、无源 browse 明确失败。
 - `market-ui.test.ts`：无内置源、无 `githubRow`、`github-dialog`/`github-open`/`showNoSources` 断言。
 - 真实窗口（源码 dev 壳）：无源空状态、GitHub 弹窗、临时 `format:1` 源添加→卡片渲染→移除→回空状态均实测；`npm test` 675/667 通过/8 跳过，`typecheck`、`build` 通过。
+
+## 第七批：同时接受富社区目录（2026-11-24）
+
+**问题**：用户对比 `dsh-market` 后发现它按 Star/下载排序，而壳内市场添加自己的源后这些值全是 0。根因不是排序实现，而是数据源：壳市场只认官方 format 1 index，用户添加的 `dsh-plugin-catalog/index.json` 只有版本信息；`dsh-market` 默认拉 `https://awesome-dsh-plugin.com/plugins.json`，条目里已经预计算了 `stars`、`downloads`、`githubReleaseDownloads`。
+
+**决定**：`parseMarketCatalog()` 按文档形状分流——`format === 1` 仍走官方 index 解析器；没有 `format` 且 `plugins` 是数组时走原有富目录 `parseCatalog`。两种源共用同一份源模型/缓存/排序；不合并两个源、也不在运行时逐仓库请求 GitHub。富目录的 `downloads` 为空时回退 `githubReleaseDownloads`，因为市场卡片只有一个「下载」数字，否则所有 GitHub-only 条目都会显示 0。
+
+**放弃的方案**：① 只给用户一个「去用 dsh-market」的答复——最强理由是零代码；放弃是因为我们已经有源机制，缺的只是解析分支。② 把富目录转成 format 1 再喂旧解析器——会丢掉 `stars`/`downloads`，正是用户要的字段。③ 在壳里逐条请求 GitHub API 补齐 Star——6554/12960 条会触发限流且打开极慢；富目录已经预计算，没有理由重算。
+
+**证据**：`market-index-source.test.ts` 的 rich catalog 用例断言 stars=42、`downloads` 回退 GitHub release 下载数 5678；`market-service.test.ts` 断言无 `format` 的富目录可添加、`browse` 按 stars 排序、源标题为 `awesome-dsh-plugin`。市场测试 30/30，全量 688/680/8/0，`typecheck`、`build` 通过。

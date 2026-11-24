@@ -292,6 +292,36 @@ test('a custom index is validated before it is saved, cached, and selected', asy
   assert.equal(service.sources().items.length, 0, 'a broken index is never saved')
 })
 
+test('the rich community catalog is accepted as a source', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-market-rich-'))
+  const service = new MarketService({
+    profileDir: dir,
+    runtimeRoot: dir,
+    appExecutable: 'x',
+    stateDir: join(dir, '.market'),
+    fetchJsonImpl: () => Promise.resolve({
+      name: 'awesome-dsh-plugin',
+      plugins: [
+        {
+          name: 'dsh-rich',
+          owner: 'acme',
+          stars: 42,
+          downloads: 1234,
+          npm: 'dsh-rich',
+          added: '2026-11-20',
+        },
+      ],
+    }),
+  })
+
+  const added = await service.addSource('https://awesome-dsh-plugin.com/plugins.json')
+  assert.equal(added.ok, true)
+  const browsed = await service.browse({ source: String(added.selected), sort: 'stars' })
+  assert.equal(browsed.total, 1)
+  assert.equal((browsed.entries[0] as { stars?: number } | undefined)?.stars, 42)
+  assert.equal(browsed.source.title, 'awesome-dsh-plugin')
+})
+
 test('a source without star counts falls back to newest and says so', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-market-no-stars-'))
   const service = new MarketService({

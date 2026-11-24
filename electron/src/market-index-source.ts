@@ -11,7 +11,7 @@
  * skipped.
  */
 
-import type { Catalog, CatalogCategory, CatalogEntry } from './market-catalog-source.ts'
+import { parseCatalog, type Catalog, type CatalogCategory, type CatalogEntry } from './market-catalog-source.ts'
 
 /** Text that may be a plain string or an official `{ en, zh }` object. */
 type Localized = string | { readonly en?: unknown; readonly zh?: unknown; readonly [key: string]: unknown }
@@ -244,6 +244,33 @@ export function indexTitle(document: unknown, fallback: string): string {
   if (document === null || typeof document !== 'object') return fallback
   const title = (document as Record<string, unknown>).title
   return displayText(title) ?? fallback
+}
+
+/**
+ * Parse either an official `format: 1` index or the rich community catalog
+ * (`plugins.json`) that `dsh-market` itself consumes.
+ *
+ * The rich catalog is not an official index: it carries no `format` or
+ * `versions`, but it does carry the pre-computed `stars`, download counts,
+ * category and install fields the market UI wants. It is the same document
+ * the shell used before sources became switchable.
+ */
+export function parseMarketCatalog(document: unknown, sourceUrl: string): Catalog {
+  if (document === null || typeof document !== 'object') throw new Error('插件索引不是 JSON 对象')
+  const record = document as Record<string, unknown>
+  if (!Array.isArray(record.plugins)) throw new Error('插件索引缺少 plugins 数组')
+  if (record.format === 1) return parseIndexCatalog(document, sourceUrl)
+  if (record.format !== undefined) throw new Error('插件索引 format 必须为 1')
+  const catalog = parseCatalog(document)
+  if (catalog.entries.length === 0) throw new Error('插件目录没有可识别的条目')
+  return catalog
+}
+
+/** The selector label for either document shape. */
+export function marketCatalogTitle(document: unknown, fallback: string): string {
+  if (document === null || typeof document !== 'object') return fallback
+  const record = document as Record<string, unknown>
+  return displayText(record.title) ?? text(record.name) ?? fallback
 }
 
 /** Localized text for a source's own display name. */
